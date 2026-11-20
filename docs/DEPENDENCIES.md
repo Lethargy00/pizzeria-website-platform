@@ -13,7 +13,7 @@ The M1 tooling set below was approved as part of the foundation bootstrap, commi
 | `typescript-eslint` | 8.35.0  | TypeScript lint rules and parser       | MIT        |
 | `prettier`          | 3.6.2   | Formatting                             | MIT        |
 | `vitest`            | 3.2.4   | Unit and component tests               | MIT        |
-| `@playwright/test`  | 1.55.0  | E2E, visual regression, keyboard tests | Apache-2.0 |
+| `@playwright/test`  | 1.55.1  | E2E, visual regression, keyboard tests | Apache-2.0 |
 | `turbo`             | 2.5.4   | Task runner and caching                | MIT        |
 
 Notes:
