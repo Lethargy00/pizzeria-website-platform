@@ -121,13 +121,30 @@ export function changedPaths(apiFiles) {
   return [...new Set(out)];
 }
 
+/** The pulls API never lists more than this many files / commits for one PR. */
+export const FILES_CAP = 3000;
+export const COMMITS_CAP = 250;
+
+/** Fail closed: a list at the API cap may be truncated, so nothing can be judged from it. */
+export function assertNotTruncated(kind, count, cap) {
+  if (count >= cap) {
+    throw new Error(
+      `✗ PR lists ${count} ${kind}, the GitHub API maximum (${cap}); the list may be truncated, ` +
+        'so the gates cannot check it. Split the PR into smaller PRs.',
+    );
+  }
+}
+
 export async function prFilesAndLabels(repo, pr) {
   const files = [];
+  let raw = 0;
   for (let page = 1; ; page++) {
     const batch = await gh(`repos/${repo}/pulls/${pr}/files?per_page=100&page=${page}`);
+    raw += batch.length;
     files.push(...changedPaths(batch));
     if (batch.length < 100) break;
   }
+  assertNotTruncated('files', raw, FILES_CAP);
   const issue = await gh(`repos/${repo}/issues/${pr}`);
   return { files, labels: issue.labels.map((l) => l.name), body: issue.body ?? '' };
 }
@@ -154,6 +171,7 @@ export async function prAuthorAndCommits(repo, pr) {
     );
     if (batch.length < 100) break;
   }
+  assertNotTruncated('commits', commits.length, COMMITS_CAP);
   const u = pull.user ?? {};
   return { user: { login: u.login, type: u.type, id: u.id }, commits };
 }
@@ -165,7 +183,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… review-gate <pr-number>');
     process.exit(2);
   }
-  const { files, labels } = await prFilesAndLabels(repo, pr);
+  let files, labels;
+  try {
+    ({ files, labels } = await prFilesAndLabels(repo, pr));
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
   const r = evaluate(files, labels);
   for (const [a, reasons] of r.required)
     console.log(`${labels.includes(a) ? '✓' : '✗'} ${a}\n    ${reasons.join('\n    ')}`);

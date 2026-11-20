@@ -8,7 +8,14 @@ import {
   DEPENDABOT,
   WEB_FLOW,
 } from '../touches-guard.mjs';
-import { evaluate, changedPaths, prFilesAndLabels, prAuthorAndCommits } from '../review-gate.mjs';
+import {
+  evaluate,
+  changedPaths,
+  prFilesAndLabels,
+  prAuthorAndCommits,
+  FILES_CAP,
+  COMMITS_CAP,
+} from '../review-gate.mjs';
 
 const BOT = { login: 'dependabot[bot]', type: 'Bot', id: 49699333 };
 const HUMAN = { login: 'Wetterbro', type: 'User', id: 47597724 };
@@ -61,6 +68,22 @@ const cases = [
   [
     'dependabot: body with an unrelated Closes is ignored, allow-list still applies',
     { user: BOT, body: 'Closes #59', files: ['scripts/review-gate.mjs'] },
+    false,
+  ],
+  ['dependabot: .yaml workflow', { user: BOT, files: ['.github/workflows/release.yaml'] }, true],
+  [
+    'dependabot: nested file under workflows',
+    { user: BOT, files: ['.github/workflows/scripts/run.sh'] },
+    false,
+  ],
+  [
+    'dependabot: non-YAML file in workflows',
+    { user: BOT, files: ['.github/workflows/evil.js'] },
+    false,
+  ],
+  [
+    'dependabot: workflow subfolder yml',
+    { user: BOT, files: ['.github/workflows/sub/ci.yml'] },
     false,
   ],
   [
@@ -333,3 +356,64 @@ for (const [files, labels, missing] of reviewCases) {
     );
   });
 }
+
+// Fail closed when the pulls API may have truncated the list (3000 files / 250 commits).
+const mockPaged = (total, make) => async (url) => {
+  const u = new URL(url);
+  const page = Number(u.searchParams.get('page') ?? 1);
+  const per = Number(u.searchParams.get('per_page') ?? 30);
+  if (u.pathname.endsWith('/files') || u.pathname.endsWith('/commits')) {
+    const start = (page - 1) * per;
+    const n = Math.max(0, Math.min(per, total - start));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => Array.from({ length: n }, (_, i) => make(start + i)),
+    };
+  }
+  return { ok: true, status: 200, json: async () => ({ user: BOT, labels: [], body: '' }) };
+};
+const withFetch = async (impl, fn) => {
+  const real = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = real;
+  }
+};
+const fileAt = (i) => ({ filename: `packages/p${i}/package.json` });
+const commitAt = (i) => ({
+  sha: String(i).padStart(40, '0'),
+  author: BOT,
+  committer: WEBFLOW,
+  commit: { verification: { verified: true, reason: 'valid' } },
+});
+
+test(`caps: ${FILES_CAP} files (API maximum) fails closed`, async () => {
+  assert.equal(FILES_CAP, 3000);
+  await withFetch(mockPaged(FILES_CAP, fileAt), () =>
+    assert.rejects(prFilesAndLabels('o/r', 1), /3000 files.*may be truncated/),
+  );
+});
+
+test('caps: one file below the files cap is listed in full', async () => {
+  await withFetch(mockPaged(FILES_CAP - 1, fileAt), async () => {
+    const { files } = await prFilesAndLabels('o/r', 1);
+    assert.equal(files.length, FILES_CAP - 1);
+  });
+});
+
+test(`caps: ${COMMITS_CAP} commits (API maximum) fails closed`, async () => {
+  assert.equal(COMMITS_CAP, 250);
+  await withFetch(mockPaged(COMMITS_CAP, commitAt), () =>
+    assert.rejects(prAuthorAndCommits('o/r', 1), /250 commits.*may be truncated/),
+  );
+});
+
+test('caps: one commit below the commits cap is listed in full', async () => {
+  await withFetch(mockPaged(COMMITS_CAP - 1, commitAt), async () => {
+    const { commits } = await prAuthorAndCommits('o/r', 1);
+    assert.equal(commits.length, COMMITS_CAP - 1);
+  });
+});

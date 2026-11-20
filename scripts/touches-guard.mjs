@@ -3,7 +3,8 @@
 // globs of the issue it closes.
 // Dependabot exception (#59): a PR authored by the real dependabot[bot] app (identity from the
 // pulls API, never the body or labels) needs no "Closes #n", but may only change dependency
-// manifests, the lockfile or workflow files (renames are checked by both old and new path).
+// manifests, the lockfile or top-level workflow files (.github/workflows/*.yml|yaml); renames
+// are checked by both old and new path. Files or commits at the API list cap fail closed.
 //
 // Commit check: every commit must have author dependabot[bot] (49699333), committer web-flow
 // (19864447) and a valid signature. This raises the bar but CANNOT prove Dependabot wrote a
@@ -35,7 +36,7 @@ export const DEPENDABOT_FILES = Object.freeze([
   'packages/*/package.json',
   'playground/package.json',
   'pnpm-lock.yaml',
-  '.github/workflows/**',
+  '.github/workflows/*.{yml,yaml}',
 ]);
 
 /** True only for the API identity of the Dependabot app (login, type and id must all match). */
@@ -162,8 +163,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… touches-guard <pr-number>');
     process.exit(2);
   }
-  const { files, body } = await prFilesAndLabels(repo, pr);
-  const { user, commits } = await prAuthorAndCommits(repo, pr);
+  let files, body, user, commits;
+  try {
+    ({ files, body } = await prFilesAndLabels(repo, pr));
+    ({ user, commits } = await prAuthorAndCommits(repo, pr));
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
   const r = await evaluateTouches({
     user,
     commits,
