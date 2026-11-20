@@ -6,7 +6,8 @@
   "license": "UNLICENSED",
   "description": "Adapter interfaces and implementations (email, webhook, analytics, maps, storage, CMS). Mock first.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./interfaces": "./src/interfaces/index.ts"
   },
   "dependencies": {
     "@pwp/schema": "workspace:*",
