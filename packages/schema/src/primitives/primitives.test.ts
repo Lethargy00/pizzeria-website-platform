@@ -126,6 +126,34 @@ describe('strictObject', () => {
   });
 });
 
+describe('Email issues', () => {
+  it.each([
+    'nope',
+    `${'a'.repeat(65)}@b.se`,
+    'a@-b.se',
+    'a@b-.se',
+    'a@x.-b.se',
+    'info@roma.se\nBcc: x@evil.example',
+  ])('raises exactly one invalid_format issue for %j', (value) => {
+    const result = Email.safeParse(value);
+    expect(result.success).toBe(false);
+    expect(
+      result.error?.issues.map((i) => ({
+        code: i.code,
+        format: (i as { format?: string }).format,
+      })),
+    ).toEqual([{ code: 'invalid_format', format: 'email' }]);
+  });
+
+  it('is linear on long hostile input', () => {
+    const start = Date.now();
+    for (const value of [`a@${'a-'.repeat(50_000)}!`, `${'a.'.repeat(50_000)}@b.se`]) {
+      expect(Email.safeParse(value).success).toBe(false);
+    }
+    expect(Date.now() - start).toBeLessThan(500);
+  });
+});
+
 describe('SafeUrl issues', () => {
   it('raises a custom issue with pwpCode unsafe_url', () => {
     expect(customParams(SafeUrl.safeParse('javascript:alert(1)'))).toEqual([
