@@ -21,4 +21,5 @@ Notes:
 - `typescript` stays below 5.9 because `typescript-eslint` 8.35 supports `<5.9.0`; upgrade both together.
 - These versions were chosen offline (agent sessions can't reach the npm registry) and are known releases, not the newest ones. Dependabot opens upgrade PRs weekly; each goes through the normal dependency review.
 - Guard scripts in `scripts/` (tenant-guard, boundaries, review-gate, touches-guard, licenses) use only Node built-ins on purpose.
+- Override: `tinypool` forced to 2.1.2 (CVE-2026-104848, CVE-2026-104849) in `pnpm-workspace.yaml`.
 - Planned, each needing its own `type:dependency` issue: `astro`, `zod` (M2), an island framework (Preact or Solid), an HTML/Markdown sanitizer, an image pipeline (M5), `@axe-core/playwright` and Lighthouse CI (M4).

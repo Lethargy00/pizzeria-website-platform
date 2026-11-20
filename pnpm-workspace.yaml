@@ -5,3 +5,7 @@ packages:
 
 # Dependency build scripts are blocked unless listed here (pnpm 10 default).
 onlyBuiltDependencies: []
+
+# Security overrides: force patched transitive versions. Remove when upstream ranges include the fix.
+overrides:
+  tinypool: 2.1.2 # CVE-2026-104848 (<=2.1.0), CVE-2026-104849 (<2.1.2): prototype pollution → RCE
