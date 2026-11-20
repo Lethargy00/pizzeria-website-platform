@@ -31,11 +31,18 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      # Failures are re-emitted as annotations so agents can read them via the check-runs API.
       - name: Dependency audit (fail on high/critical)
-        run: pnpm audit --audit-level high
+        run: |
+          set -o pipefail
+          pnpm audit --audit-level high 2>&1 | tee audit.log || { grep -iE 'high|critical|package|patched|path|vulnerab' audit.log | head -n 40 | sed 's/^/::error title=pnpm audit::/'; exit 1; }
       - name: License check
-        run: pnpm licenses list --json | node scripts/check-licenses.mjs
+        if: success() || failure()
+        run: |
+          set -o pipefail
+          pnpm licenses list --json | node scripts/check-licenses.mjs 2>&1 | tee licenses.log || { head -n 40 licenses.log | sed 's/^/::error title=licenses::/'; exit 1; }
       - name: SBOM (CycloneDX)
+        if: success() || failure()
         uses: anchore/sbom-action@v0
         with: { format: cyclonedx-json, output-file: sbom.cdx.json, artifact-name: sbom.cdx.json }
 
