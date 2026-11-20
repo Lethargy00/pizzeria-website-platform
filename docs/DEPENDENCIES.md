@@ -6,7 +6,7 @@ The M1 tooling set below was approved as part of the foundation bootstrap, commi
 
 | Package | Version | Purpose | License |
 |---|---|---|---|
-| `typescript` | 5.9.3 | Strict type checking | Apache-2.0 |
+| `typescript` | 5.8.3 | Strict type checking | Apache-2.0 |
 | `@types/node` | 24.0.10 | Node API types for configs and scripts | MIT |
 | `eslint` | 9.30.0 | Linting | MIT |
 | `@eslint/js` | 9.30.0 | ESLint recommended rules | MIT |
@@ -17,6 +17,7 @@ The M1 tooling set below was approved as part of the foundation bootstrap, commi
 | `turbo` | 2.5.4 | Task runner and caching | MIT |
 
 Notes:
+- `typescript` stays below 5.9 because `typescript-eslint` 8.35 supports `<5.9.0`; upgrade both together.
 - These versions were chosen offline (agent sessions can't reach the npm registry) and are known releases, not the newest ones. Dependabot opens upgrade PRs weekly; each goes through the normal dependency review.
 - Guard scripts in `scripts/` (tenant-guard, boundaries, review-gate, touches-guard, licenses) use only Node built-ins on purpose.
 - Planned, each needing its own `type:dependency` issue: `astro`, `zod` (M2), an island framework (Preact or Solid), an HTML/Markdown sanitizer, an image pipeline (M5), `@axe-core/playwright` and Lighthouse CI (M4).

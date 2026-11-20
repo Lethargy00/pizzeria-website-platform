@@ -26,9 +26,15 @@ jobs:
         uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc }
       - if: steps.check.outputs.missing == 'true'
-        run: pnpm install --ignore-scripts
+        # Errors are re-emitted as annotations so agents can read them via the check-runs API.
+        run: |
+          set -o pipefail
+          pnpm install --ignore-scripts 2>&1 | tee install.log || { tail -n 25 install.log | sed 's/^/::error title=pnpm install::/'; exit 1; }
       - if: steps.check.outputs.missing == 'true'
-        run: pnpm format
+        run: |
+          set -o pipefail
+          pnpm format 2>&1 | tee format.log || { tail -n 25 format.log | sed 's/^/::error title=prettier::/'; exit 1; }
+          rm -f install.log format.log
       - if: steps.check.outputs.missing == 'true'
         run: |
           git config user.name "github-actions[bot]"
