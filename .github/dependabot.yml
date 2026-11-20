@@ -6,7 +6,12 @@ updates:
     open-pull-requests-limit: 5
     labels: ['type:dependency', 'review:architect', 'review:security']
     versioning-strategy: increase
+    cooldown: { default-days: 14 }
+    groups:
+      astro:
+        patterns: ['astro', '@astrojs/*']
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly, day: monday }
     labels: ['type:dependency', 'area:ci', 'review:security']
+    cooldown: { default-days: 14 }
