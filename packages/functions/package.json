@@ -1,0 +1,16 @@
+{
+  "name": "@pwp/functions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "description": "Serverless handlers (forms, webhooks): validated, size-limited, rate-limited.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pwp/schema": "workspace:*",
+    "@pwp/core": "workspace:*",
+    "@pwp/adapters": "workspace:*"
+  }
+}

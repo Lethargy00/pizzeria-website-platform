@@ -1,0 +1,15 @@
+{
+  "name": "@pwp/themes",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "description": "Starter themes: token sets, self-hosted fonts, image treatments.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pwp/schema": "workspace:*",
+    "@pwp/tokens": "workspace:*"
+  }
+}

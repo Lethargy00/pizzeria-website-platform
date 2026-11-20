@@ -1,0 +1,23 @@
+{
+  "name": "@pwp/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "description": "The `pwp` compiler: validate \u2192 resolve theme \u2192 assemble pages \u2192 build \u2192 audit.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pwp/schema": "workspace:*",
+    "@pwp/core": "workspace:*",
+    "@pwp/tokens": "workspace:*",
+    "@pwp/themes": "workspace:*",
+    "@pwp/ui": "workspace:*",
+    "@pwp/adapters": "workspace:*",
+    "@pwp/functions": "workspace:*"
+  },
+  "bin": {
+    "pwp": "./bin/pwp.mjs"
+  }
+}

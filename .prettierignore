@@ -1,0 +1,8 @@
+pnpm-lock.yaml
+PROMPT.md
+AGENTS.md
+.claude/
+dist/
+coverage/
+# GITHUB_TOKEN may not modify workflow files, so the bootstrap job must not reformat them.
+.github/workflows/

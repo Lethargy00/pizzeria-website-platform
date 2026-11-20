@@ -1,0 +1,57 @@
+name: security
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1'
+permissions:
+  contents: read
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deps:
+    # dependency audit, license allow-list and SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: Require lockfile
+        run: test -f pnpm-lock.yaml || { echo "::error::pnpm-lock.yaml is missing (docs/HANDOFF.md)."; exit 1; }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Dependency audit (fail on high/critical)
+        run: pnpm audit --audit-level high
+      - name: License check
+        run: pnpm licenses list --json | node scripts/check-licenses.mjs
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with: { format: cyclonedx-json, output-file: sbom.cdx.json, artifact-name: sbom.cdx.json }
+
+  codeql:
+    # Code scanning on a private repo needs GitHub Code Security. Enable it, then set the
+    # repository variable CODE_SCANNING_ENABLED=true (docs/HANDOFF.md). Until then this job
+    # is skipped *visibly* and the gap is tracked as an open security finding.
+    if: vars.CODE_SCANNING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: github/codeql-action/init@v3
+        with: { languages: javascript-typescript, queries: security-extended }
+      - uses: github/codeql-action/analyze@v3

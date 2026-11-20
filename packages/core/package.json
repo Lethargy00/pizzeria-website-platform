@@ -1,0 +1,14 @@
+{
+  "name": "@pwp/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "description": "Pure, framework-free logic: opening hours and 'open now', time zones, allergen mapping, i18n helpers, slugs.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pwp/schema": "workspace:*"
+  }
+}

@@ -30,7 +30,7 @@ Recorded by `orchestrator` on 2026-11-20.
 16. **Q3.3 Styling:** design tokens as CSS custom properties from a typed token schema; scoped component CSS; no runtime CSS-in-JS. — `default`
 17. **Q3.4 Island library:** Preact or Solid, whichever is smaller for the needs. Final choice via ADR + `type:dependency` issue. — `default`
 18. **Q3.5 Package manager / monorepo tool:** pnpm workspaces + Turborepo. — `default`
-19. **Q3.6 Node version:** current Active LTS, pinned in `.nvmrc` and `engines`. Exact major to be confirmed by `platform` in M1. — `default`
+19. **Q3.6 Node version:** Node 26 (Active LTS since 2026-10-28, supported to 2029-04-30), pinned in `.nvmrc` (`26`) and `engines` (`>=26 <27`); pnpm 10.28.0 via `packageManager`. — `default`
 20. **Q3.7 Database:** none in v1 (no ordering, see 32). — `default`
 
 ## Customization and theming
@@ -116,3 +116,4 @@ Recorded by `orchestrator` on 2026-11-20.
 78. **No GitHub Actions API.** Workflow runs can't be read through `gh run` from agent sessions. The Orchestrator reads CI results through `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` and `/status` (verified reachable on 2026-11-20).
 79. **No package installs in agent sessions.** The agents' shell can't reach the npm registry, so `pnpm install` and lockfile generation can't run locally. `pnpm-lock.yaml` must be generated in CI (or by the human) on the first `platform` PR. Tracked as a `status:blocked` risk on the M1 epic.
 80. **Sessions are not long-running.** Each agent session ends when it replies. The Orchestrator's wait-with-backoff loop (Appendix B.1) therefore runs as one loop per session, resumed by the human or by a scheduled task.
+81. **M1 Foundation built without PRs.** At the human's request (2026-11-20), the M1 foundation (tooling, CI, guard scripts, ADR 0001, threat model, security docs) was committed directly to `main` by `orchestrator`, without issues, PRs or role reviews. The planning PR #2 was merged the same way. From M2 on, the normal flow in `AGENTS.md` applies (issue → PR → review matrix → merge). — `user`

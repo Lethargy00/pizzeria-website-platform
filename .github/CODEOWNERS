@@ -1,0 +1,49 @@
+# Mirrors path ownership in PROMPT.md §11.1 / AGENTS.md §8.
+# All agents share one GitHub account (Q10.6), so every path maps to @Lethargy00;
+# the role comment says which agent role owns it. Switch to per-role GitHub Apps
+# for real separation (docs/SECURITY.md).
+
+*                                   @Lethargy00  # orchestrator (default)
+
+# platform: shared hot files, CI, CLI, scripts
+/package.json                       @Lethargy00  # platform
+/pnpm-lock.yaml                     @Lethargy00  # platform
+/pnpm-workspace.yaml                @Lethargy00  # platform
+/turbo.json                         @Lethargy00  # platform
+/tsconfig.base.json                 @Lethargy00  # platform
+/.npmrc                             @Lethargy00  # platform
+/.github/workflows/                 @Lethargy00  # platform + security review
+/.github/CODEOWNERS                 @Lethargy00  # platform + security review
+/packages/cli/                      @Lethargy00  # platform
+/scripts/                           @Lethargy00  # platform
+
+# architect: contracts and boundaries
+/docs/adr/                          @Lethargy00  # architect
+/packages/schema/                   @Lethargy00  # architect
+/scripts/boundaries.json            @Lethargy00  # architect
+/packages/adapters/src/interfaces/  @Lethargy00  # architect
+
+# security
+/SECURITY.md                        @Lethargy00  # security
+/docs/SECURITY.md                   @Lethargy00  # security
+/docs/THREAT-MODEL.md               @Lethargy00  # security
+/scripts/tenant-guard.mjs           @Lethargy00  # security
+/.github/workflows/security.yml     @Lethargy00  # security
+
+# design-system
+/packages/tokens/                   @Lethargy00  # design-system
+/packages/themes/                   @Lethargy00  # design-system
+/playground/                        @Lethargy00  # design-system
+
+# ui-N, backend-N
+/packages/ui/                       @Lethargy00  # ui (per component folder)
+/packages/core/                     @Lethargy00  # backend
+/packages/functions/                @Lethargy00  # backend + security review
+/packages/adapters/                 @Lethargy00  # backend + security review
+
+# qa, a11y-perf, docs
+/e2e/                               @Lethargy00  # qa
+/playwright.config.ts               @Lethargy00  # qa
+/docs/guides/                       @Lethargy00  # docs
+/tenants/                           @Lethargy00  # docs (data only)
+/README.md                          @Lethargy00  # docs

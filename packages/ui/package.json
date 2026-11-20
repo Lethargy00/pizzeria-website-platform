@@ -1,0 +1,16 @@
+{
+  "name": "@pwp/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "description": "Astro components and islands, one folder per component, auto-discovered.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pwp/schema": "workspace:*",
+    "@pwp/tokens": "workspace:*",
+    "@pwp/core": "workspace:*"
+  }
+}

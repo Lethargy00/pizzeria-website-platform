@@ -1,0 +1,38 @@
+name: bootstrap-lockfile
+# Agent sessions can't reach the npm registry (docs/DECISIONS.md #79), so the first
+# install happens here. Runs only when pnpm-lock.yaml is missing: installs with
+# --ignore-scripts, writes the lockfile, applies Prettier once (agents couldn't run it)
+# and commits both to main.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['package.json', 'packages/*/package.json', 'playground/package.json', 'pnpm-workspace.yaml', '.npmrc']
+permissions:
+  contents: read
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: echo "missing=$([ -f pnpm-lock.yaml ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+      - if: steps.check.outputs.missing == 'true'
+        uses: pnpm/action-setup@v4
+      - if: steps.check.outputs.missing == 'true'
+        uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - if: steps.check.outputs.missing == 'true'
+        run: pnpm install --ignore-scripts
+      - if: steps.check.outputs.missing == 'true'
+        run: pnpm format
+      - if: steps.check.outputs.missing == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: generate pnpm-lock.yaml and apply prettier" -m "Agent: bootstrap-lockfile workflow"
+          git push

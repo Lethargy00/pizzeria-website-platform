@@ -1,0 +1,45 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# NOTE: actions are pinned by tag until they can be pinned to commit SHAs
+# (security finding tracked in GitHub; docs/SECURITY.md §Supply chain).
+jobs:
+  guards:
+    # Dependency-free checks: run even before the lockfile exists.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - run: node --test "scripts/**/*.test.mjs"
+      - run: node scripts/tenant-guard.mjs
+      - run: node scripts/check-boundaries.mjs
+
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: Require lockfile
+        run: |
+          test -f pnpm-lock.yaml || { echo "::error::pnpm-lock.yaml is missing. Run the 'bootstrap-lockfile' workflow (docs/HANDOFF.md)."; exit 1; }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build

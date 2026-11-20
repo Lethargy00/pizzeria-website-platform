@@ -7,4 +7,6 @@ A multi-tenant platform that compiles a pizzeria's configuration and content int
 - **Decisions so far:** [`docs/DECISIONS.md`](docs/DECISIONS.md)
 - **Progress:** [`docs/PROGRESS.md`](docs/PROGRESS.md)
 
-Status: Phase 1 (planning and GitHub setup). No code yet.
+Status: M1 Foundation in place (tooling, CI, guards, security docs). Next: M2 schemas and core, M3 tokens and themes.
+
+Setup: [`docs/SETUP.md`](docs/SETUP.md) · Architecture: [`docs/adr/0001-architecture.md`](docs/adr/0001-architecture.md) · Security: [`docs/SECURITY.md`](docs/SECURITY.md)

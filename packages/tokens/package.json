@@ -1,0 +1,14 @@
+{
+  "name": "@pwp/tokens",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "description": "Design-token pipeline: token schema \u2192 CSS custom properties, contrast gate.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pwp/schema": "workspace:*"
+  }
+}

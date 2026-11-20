@@ -1,0 +1,11 @@
+{
+  "name": "@pwp/schema",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "description": "Zod schemas: tenant config, theme tokens, menu, hours, locations, pages. The source of every contract.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

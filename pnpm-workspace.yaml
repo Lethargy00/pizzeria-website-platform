@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+  - playground
+# tenants/ is deliberately NOT a workspace: tenants are data only (PROMPT.md §6).
+
+# Dependency build scripts are blocked unless listed here (pnpm 10 default).
+onlyBuiltDependencies: []
