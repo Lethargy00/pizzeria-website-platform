@@ -11,6 +11,7 @@ declare const URL: new (input: string) => {
   readonly username: string;
   readonly password: string;
   readonly hostname: string;
+  readonly host: string;
 };
 
 /** The only URL schemes a tenant may use (PROMPT.md §6, ADR 0002). */
@@ -30,9 +31,49 @@ const INVISIBLE_OR_SPACE = /[\p{Cc}\p{Cf}\p{Z}]/u;
 const MAILTO_QUERY_PARAM = /^(?:subject|body)=[A-Za-z0-9%._~!$'()*+,;:@/?-]*$/;
 const TEL_BODY = /^\+?[0-9().-]{3,32}$/;
 
+/**
+ * The canonical authority a tenant must write: lowercase ASCII host, optional port. No userinfo,
+ * no percent-encoding, no Unicode (an IDN must be written in its visible `xn--` form), no
+ * fullwidth or ideographic dots.
+ */
+const RAW_AUTHORITY = /^[a-z0-9.-]+(:\d{1,5})?$/;
+/** One DNS label: not empty, and no hyphen at the start or end. */
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+/** A top-level label that is all digits or `0x…` means the parser read the host as an IPv4 address. */
+const NUMERIC_LABEL = /^(?:[0-9]+|0x[0-9a-f]*)$/;
+
+/** In `subject`: any percent-encoded C0 control (including CR, LF, NUL) or DEL. */
+const SUBJECT_ENCODED_CONTROL = /%(?:[01][0-9a-f]|7f)/i;
+/** In `body`: CR, LF and TAB are allowed (RFC 6068 line breaks); NUL, other C0 controls and DEL are not. */
+const BODY_ENCODED_CONTROL = /%(?:0[0-8bcef]|1[0-9a-f]|7f)/i;
+
+/**
+ * The authority exactly as written: the text after `https://` up to the first `/`, `?` or `#`.
+ * Backslashes were already rejected, so the parser and this split agree on where it ends.
+ */
+function rawAuthority(value: string): string {
+  const rest = value.slice('https://'.length);
+  const end = rest.search(/[/?#]/);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+function isSafeHost(hostname: string): boolean {
+  const labels = hostname.split('.');
+  return (
+    labels.length >= 2 &&
+    labels.every((label) => DNS_LABEL.test(label)) &&
+    // No IP literals in any form (`127.0.0.1`, `2130706433`, `0x7f.1`): a TLD is never numeric.
+    !NUMERIC_LABEL.test(labels[labels.length - 1] ?? '')
+  );
+}
+
 function isSafeHttps(value: string): boolean {
   // The literal `https://` prefix matters: `new URL('https:evil.example')` also parses.
   if (!value.startsWith('https://') || value.startsWith('https:///')) return false;
+  // Validate what the tenant wrote, not what the parser normalised it to (#107 F1): the raw
+  // string is what ends up in `href`.
+  const authority = rawAuthority(value);
+  if (!RAW_AUTHORITY.test(authority)) return false;
   let url: InstanceType<typeof URL>;
   try {
     url = new URL(value);
@@ -44,9 +85,9 @@ function isSafeHttps(value: string): boolean {
     // No credentials: `https://bank.example@evil.example` is a phishing pattern.
     url.username === '' &&
     url.password === '' &&
-    url.hostname.includes('.') &&
-    !url.hostname.startsWith('.') &&
-    !url.hostname.endsWith('.')
+    // The parser changed nothing: no IPv4 rewriting, no default-port stripping (`:443`).
+    url.host === authority &&
+    isSafeHost(url.hostname)
   );
 }
 
@@ -57,8 +98,13 @@ function isSafeMailto(value: string): boolean {
   if (!Email.safeParse(address).success) return false;
   if (queryStart === -1) return true;
   const query = rest.slice(queryStart + 1);
-  // Only `subject` and `body`: no `cc`/`bcc`/`to` header injection.
-  return query.split('&').every((param) => MAILTO_QUERY_PARAM.test(param));
+  // Only `subject` and `body`: no `cc`/`bcc`/`to` header injection. No encoded CR/LF/NUL in
+  // `subject` (THREAT-MODEL T16, #107 F2), and no encoded NUL in `body`.
+  return query.split('&').every((param) => {
+    if (!MAILTO_QUERY_PARAM.test(param)) return false;
+    if (param.startsWith('subject=')) return !SUBJECT_ENCODED_CONTROL.test(param);
+    return !BODY_ENCODED_CONTROL.test(param);
+  });
 }
 
 function isSafeTel(value: string): boolean {
@@ -67,7 +113,8 @@ function isSafeTel(value: string): boolean {
 }
 
 /**
- * True if `value` is a link a tenant may use: `https://…` with a host and no credentials,
+ * True if `value` is a link a tenant may use: `https://…` with a canonical lowercase ASCII host
+ * (no IP address, no userinfo, no percent-encoding, IDNs only as `xn--`),
  * `mailto:<address>` (optionally `?subject=…&body=…`) or `tel:<number>`.
  *
  * The scheme must be written in lowercase and come first. Everything else is rejected, including
