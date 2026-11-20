@@ -108,11 +108,24 @@ async function gh(path) {
   return res.json();
 }
 
+/**
+ * Paths a PR changes, from the pulls/files API entries. A rename contributes both its new
+ * `filename` and its `previous_filename`, so a rename cannot hide the path it removes.
+ */
+export function changedPaths(apiFiles) {
+  const out = [];
+  for (const f of apiFiles) {
+    out.push(f.filename);
+    if (f.previous_filename && f.previous_filename !== f.filename) out.push(f.previous_filename);
+  }
+  return [...new Set(out)];
+}
+
 export async function prFilesAndLabels(repo, pr) {
   const files = [];
   for (let page = 1; ; page++) {
     const batch = await gh(`repos/${repo}/pulls/${pr}/files?per_page=100&page=${page}`);
-    files.push(...batch.map((f) => f.filename));
+    files.push(...changedPaths(batch));
     if (batch.length < 100) break;
   }
   const issue = await gh(`repos/${repo}/issues/${pr}`);
@@ -132,7 +145,11 @@ export async function prAuthorAndCommits(repo, pr) {
       ...batch.map((c) => ({
         sha: c.sha,
         author: c.author ? { login: c.author.login, type: c.author.type, id: c.author.id } : null,
-        verified: c.commit?.verification?.verified === true,
+        committer: c.committer
+          ? { login: c.committer.login, type: c.committer.type, id: c.committer.id }
+          : null,
+        verified:
+          c.commit?.verification?.verified === true && c.commit?.verification?.reason === 'valid',
       })),
     );
     if (batch.length < 100) break;

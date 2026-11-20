@@ -3,14 +3,31 @@
 // globs of the issue it closes.
 // Dependabot exception (#59): a PR authored by the real dependabot[bot] app (identity from the
 // pulls API, never the body or labels) needs no "Closes #n", but may only change dependency
-// manifests, the lockfile or workflow files, and every commit must be Dependabot's own signed
-// commit. review-gate still requires approved:architect + approved:security for these files.
+// manifests, the lockfile or workflow files (renames are checked by both old and new path).
+//
+// Commit check: every commit must have author dependabot[bot] (49699333), committer web-flow
+// (19864447) and a valid signature. This raises the bar but CANNOT prove Dependabot wrote a
+// commit: a user with write access can create a web-flow-signed commit through the Contents or
+// Git Data API with the bot's noreply address as author, and it passes. The real defence is the
+// path allow-list above plus the full review-gate matrix, which still requires approved:peer,
+// approved:security on every Dependabot PR, and approved:architect for dependency files.
+//
+// Maintainers: "Update branch" (or any manual push) on a Dependabot PR adds a commit that is not
+// Dependabot's and breaks this check. Comment `@dependabot recreate` instead.
 import { pathToFileURL } from 'node:url';
 import { matchesAny } from './lib/glob.mjs';
 import { prFilesAndLabels, prAuthorAndCommits } from './review-gate.mjs';
 
 /** GitHub's fixed identity for the Dependabot app. `[bot]` logins cannot be registered by users. */
 export const DEPENDABOT = Object.freeze({ login: 'dependabot[bot]', type: 'Bot', id: 49699333 });
+
+/** The committer GitHub records for Dependabot's (and other web-UI/API) commits. */
+export const WEB_FLOW = Object.freeze({ login: 'web-flow', id: 19864447 });
+
+/** True only for the web-flow committer identity from the API (login and id must match). */
+export function isWebFlow(user) {
+  return !!user && user.login === WEB_FLOW.login && user.id === WEB_FLOW.id;
+}
 
 /** Files a Dependabot PR may change: npm manifests + lockfile, and workflows (github-actions). */
 export const DEPENDABOT_FILES = Object.freeze([
@@ -59,14 +76,18 @@ function dependabotVerdict(files, commits) {
     );
   }
   if (!commits.length) lines.push('✗ Dependabot PR has no commits to check.');
-  const foreign = commits.filter((c) => !isDependabot(c.author) || c.verified !== true);
+  const foreign = commits.filter(
+    (c) => !isDependabot(c.author) || !isWebFlow(c.committer) || c.verified !== true,
+  );
   if (foreign.length) {
     lines.push(
-      `✗ ${foreign.length} commit(s) not authored and signed by dependabot[bot]. Someone pushed to ` +
-        'the Dependabot branch: use "@dependabot recreate" instead, or open a normal PR that closes an issue:',
+      `✗ ${foreign.length} commit(s) not authored by dependabot[bot], committed by web-flow and validly ` +
+        'signed. Someone pushed to the Dependabot branch (e.g. "Update branch"): comment ' +
+        '"@dependabot recreate" instead, or open a normal PR that closes an issue:',
       ...foreign.map(
         (c) =>
-          `    ${String(c.sha ?? '').slice(0, 7)} by ${c.author?.login ?? '(unknown)'}${c.verified === true ? '' : ' (unverified)'}`,
+          `    ${String(c.sha ?? '').slice(0, 7)} author ${c.author?.login ?? '(unknown)'}, ` +
+          `committer ${c.committer?.login ?? '(unknown)'}${c.verified === true ? '' : ' (unverified)'}`,
       ),
     );
   }
@@ -84,7 +105,8 @@ function dependabotVerdict(files, commits) {
  * Pure decision for one PR. `user` and `commits` must come from the pulls API.
  * @param {{
  *   user: { login?: string, type?: string, id?: number } | null,
- *   commits?: { sha: string, author: { login?: string, type?: string, id?: number } | null, verified: boolean }[],
+ *   commits?: { sha: string, author: { login?: string, type?: string, id?: number } | null,
+ *               committer?: { login?: string, type?: string, id?: number } | null, verified: boolean }[],
  *   files: string[],
  *   body: string,
  *   issueBody: (n: number) => Promise<string> | string,

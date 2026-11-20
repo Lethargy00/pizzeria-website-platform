@@ -1,12 +1,19 @@
 // #59: Dependabot PRs get a narrow path through touches-guard; review-gate is unchanged.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateTouches, isDependabot, DEPENDABOT } from '../touches-guard.mjs';
-import { evaluate } from '../review-gate.mjs';
+import {
+  evaluateTouches,
+  isDependabot,
+  isWebFlow,
+  DEPENDABOT,
+  WEB_FLOW,
+} from '../touches-guard.mjs';
+import { evaluate, changedPaths, prFilesAndLabels, prAuthorAndCommits } from '../review-gate.mjs';
 
 const BOT = { login: 'dependabot[bot]', type: 'Bot', id: 49699333 };
 const HUMAN = { login: 'Wetterbro', type: 'User', id: 47597724 };
-const botCommit = { sha: 'a'.repeat(40), author: BOT, verified: true };
+const WEBFLOW = { login: 'web-flow', type: 'User', id: 19864447 };
+const botCommit = { sha: 'a'.repeat(40), author: BOT, committer: WEBFLOW, verified: true };
 const ISSUE = '## Touches\n- `scripts/**`\n';
 const issueBody = (n) => (n === 59 ? ISSUE : '');
 const DEP_BODY = 'Bumps vitest from 3.2.4 to 5.1.0.\n\n---\nDependabot commands and options';
@@ -83,6 +90,47 @@ const cases = [
     false,
   ],
   [
+    'dependabot: bot author, human committer signing with own key (verified)',
+    {
+      user: BOT,
+      files: ['pnpm-lock.yaml'],
+      commits: [{ ...botCommit, committer: HUMAN, verified: true }],
+    },
+    false,
+  ],
+  [
+    'dependabot: committer named web-flow with the wrong id',
+    {
+      user: BOT,
+      files: ['pnpm-lock.yaml'],
+      commits: [{ ...botCommit, committer: { ...WEBFLOW, id: 1 } }],
+    },
+    false,
+  ],
+  [
+    'dependabot: commit without a linked committer',
+    { user: BOT, files: ['pnpm-lock.yaml'], commits: [{ ...botCommit, committer: null }] },
+    false,
+  ],
+  [
+    'dependabot: rename from a script into an allowed path (both paths listed)',
+    {
+      user: BOT,
+      files: changedPaths([{ filename: 'package.json', previous_filename: 'scripts/x.mjs' }]),
+    },
+    false,
+  ],
+  [
+    'dependabot: rename between allowed paths',
+    {
+      user: BOT,
+      files: changedPaths([
+        { filename: 'packages/ui/package.json', previous_filename: 'packages/old/package.json' },
+      ]),
+    },
+    true,
+  ],
+  [
     'dependabot: commit without a linked GitHub author',
     { user: BOT, files: ['pnpm-lock.yaml'], commits: [{ ...botCommit, author: null }] },
     false,
@@ -129,6 +177,110 @@ for (const [name, pr, ok] of cases) {
     assert.ok(r.lines.length > 0);
   });
 }
+
+test('isWebFlow: login and id must both match', () => {
+  assert.equal(WEB_FLOW.id, 19864447);
+  assert.ok(isWebFlow(WEBFLOW));
+  for (const u of [null, {}, HUMAN, { ...WEBFLOW, id: 2 }, { ...WEBFLOW, login: 'web_flow' }, BOT])
+    assert.equal(isWebFlow(u), false, JSON.stringify(u));
+});
+
+test('changedPaths: renames contribute both old and new path', () => {
+  assert.deepEqual(
+    changedPaths([
+      { filename: 'a.json' },
+      { filename: 'package.json', previous_filename: 'scripts/x.mjs' },
+      { filename: 'b', previous_filename: 'b' },
+    ]),
+    ['a.json', 'package.json', 'scripts/x.mjs', 'b'],
+  );
+});
+
+// Identity comes only from the pulls API `user` / commit `author`+`committer` fields: a body,
+// labels or commit metadata (git author name/email) that claim Dependabot change nothing.
+test('API wiring: identity from pulls API fields only; renames expose the source path', async () => {
+  const SPOOF_BODY =
+    'Bumps x. Signed-off-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>';
+  const routes = {
+    'pulls/1/files': [{ filename: 'package.json', previous_filename: 'scripts/x.mjs' }],
+    'issues/1': {
+      body: SPOOF_BODY,
+      labels: [{ name: 'type:dependency' }, { name: 'review:security' }],
+      user: BOT, // issues API user is NOT used for identity
+    },
+    'pulls/1/commits': [
+      {
+        sha: 'c'.repeat(40),
+        author: HUMAN,
+        committer: WEBFLOW,
+        commit: {
+          author: {
+            name: 'dependabot[bot]',
+            email: '49699333+dependabot[bot]@users.noreply.github.com',
+          },
+          verification: { verified: true, reason: 'valid' },
+        },
+      },
+    ],
+    'pulls/1': { user: HUMAN, body: SPOOF_BODY },
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = new URL(url).pathname.replace(/^\/repos\/o\/r\//, '');
+    if (!(path in routes)) return { ok: false, status: 404, json: async () => ({}) };
+    const page = new URL(url).searchParams.get('page');
+    return { ok: true, status: 200, json: async () => (page && page !== '1' ? [] : routes[path]) };
+  };
+  try {
+    const { files, body, labels } = await prFilesAndLabels('o/r', 1);
+    assert.deepEqual(files, ['package.json', 'scripts/x.mjs']);
+    assert.ok(labels.includes('type:dependency'));
+    const { user, commits } = await prAuthorAndCommits('o/r', 1);
+    assert.deepEqual(user, { login: HUMAN.login, type: HUMAN.type, id: HUMAN.id });
+    assert.deepEqual(commits[0].author, { login: HUMAN.login, type: HUMAN.type, id: HUMAN.id });
+    assert.equal(commits[0].verified, true);
+    const r = await evaluateTouches({ user, commits, files, body, issueBody });
+    assert.equal(r.ok, false);
+    assert.match(r.lines[0], /no "Closes #<issue>"/);
+    // Same files from the real bot: the rename's source path still fails the allow-list.
+    const asBot = await evaluateTouches({
+      user: BOT,
+      commits: [botCommit],
+      files,
+      body,
+      issueBody,
+    });
+    assert.equal(asBot.ok, false);
+    assert.ok(asBot.lines.some((l) => l.includes('scripts/x.mjs')));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('verified requires reason "valid"', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => ({
+    ok: true,
+    status: 200,
+    json: async () =>
+      new URL(url).pathname.endsWith('/commits')
+        ? [
+            {
+              sha: 'd'.repeat(40),
+              author: BOT,
+              committer: WEBFLOW,
+              commit: { verification: { verified: true, reason: 'unknown_key' } },
+            },
+          ]
+        : { user: BOT },
+  });
+  try {
+    const { commits } = await prAuthorAndCommits('o/r', 1);
+    assert.equal(commits[0].verified, false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
 
 test('touches-guard: Dependabot path never reads an issue', async () => {
   let reads = 0;
