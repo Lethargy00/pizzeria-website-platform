@@ -64,6 +64,8 @@ Output is provider-agnostic static files plus function bundles; deployment sits 
 
 Node 26 (Active LTS since 2026-10-28), pnpm 10 workspaces, Turborepo, TypeScript strict (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), ESLint flat config with typescript-eslint, Prettier, Vitest, Playwright. Versions pinned exactly; `.npmrc` sets `save-exact`, `engine-strict`, `strict-peer-dependencies`. Dependency build scripts are blocked (`onlyBuiltDependencies: []`). See `docs/DEPENDENCIES.md`.
 
+> **Update (DECISIONS 82, #78):** the `engines.node` range is now `>=24.0.0 <27`, so Dependabot's Node 24 updater can run. Node 26 (`.nvmrc`, CI) remains the only tested runtime; see `docs/DECISIONS.md` entry 82.
+
 ## Consequences
 
 - Strong isolation and a small runtime surface; most pages ship zero JavaScript.
