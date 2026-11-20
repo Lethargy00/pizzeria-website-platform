@@ -15,7 +15,8 @@
     "@pwp/themes": "workspace:*",
     "@pwp/ui": "workspace:*",
     "@pwp/adapters": "workspace:*",
-    "@pwp/functions": "workspace:*"
+    "@pwp/functions": "workspace:*",
+    "yaml": "2.9.1"
   },
   "bin": {
     "pwp": "./bin/pwp.mjs"
