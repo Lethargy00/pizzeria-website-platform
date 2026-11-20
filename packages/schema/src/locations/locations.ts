@@ -3,8 +3,8 @@ import {
   Email,
   ImageRef,
   PhoneNumber,
-  SafeUrl,
   Slug,
+  isSafeUrl,
   localizedStringFor,
   strictObject,
   type LocaleContext,
@@ -67,14 +67,17 @@ export const MAP_MODES = ['none', 'static-image', 'click-to-load'] as const;
 export type MapMode = (typeof MAP_MODES)[number];
 
 /**
- * An outbound `https://` link (order platform, booking system). Built on {@link SafeUrl}, then
- * narrowed to `https:`: `mailto:` and `tel:` are not order or booking pages, and click-to-call
- * uses `phone`. Rendered only as a link, never embedded.
+ * An outbound `https://` link (order platform, booking system): a link that passes
+ * {@link isSafeUrl} and starts with `https://`. Both are checked in one refinement, so a bad link
+ * raises exactly one `unsafe_url` issue that names only `https:`. `mailto:` and `tel:` are not
+ * order or booking pages, and click-to-call uses `phone`. Rendered only as a link, never embedded.
  */
-export const HttpsUrl = SafeUrl.refine((value) => value.startsWith('https://'), {
-  error: 'Only https: links are allowed here.',
-  params: { pwpCode: 'unsafe_url', allowedSchemes: ['https:'] },
-});
+export const HttpsUrl = z
+  .string()
+  .refine((value) => value.startsWith('https://') && isSafeUrl(value), {
+    error: 'Only https: links are allowed here.',
+    params: { pwpCode: 'unsafe_url', allowedSchemes: ['https:'] },
+  });
 export type HttpsUrl = z.infer<typeof HttpsUrl>;
 
 function mapSchema(ctx: LocaleContext) {

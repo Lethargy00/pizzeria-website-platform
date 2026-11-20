@@ -165,6 +165,19 @@ describe('GeoPoint', () => {
 });
 
 describe('HttpsUrl', () => {
+  it.each(['javascript:alert(1)', 'http://x.se', 'tel:+46812345678'])(
+    'gives exactly one https-only unsafe_url issue for %s',
+    (value) => {
+      expect(HttpsUrl.safeParse(value).error?.issues).toEqual([
+        expect.objectContaining({
+          code: 'custom',
+          path: [],
+          params: { pwpCode: 'unsafe_url', allowedSchemes: ['https:'] },
+        }),
+      ]);
+    },
+  );
+
   it('rejects every unsafe SafeUrl fixture', () => {
     for (const value of safeUrlFixtures.invalid) {
       expect(HttpsUrl.safeParse(value).success, label(value)).toBe(false);
