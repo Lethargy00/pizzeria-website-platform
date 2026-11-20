@@ -362,7 +362,8 @@ A PR can be merged only when **CI is green** and every row that applies is satis
 | is any PR | 1 peer review (`approved:peer`) from `qa` or another implementer |
 | changes a contract, a public API or package boundaries | `approved:architect` |
 | adds, removes or upgrades a dependency (any change to a `package.json` dependency list or the lockfile) | `approved:architect` **and** `approved:security`, plus a linked, approved `type:dependency` issue |
-| touches functions, adapters, forms, payment or ordering, the sanitizer, CSP or headers, build isolation in the CLI, auth or secrets handling, `.github/workflows/`, or has the label `security:sensitive` | `approved:security` |
+| touches functions, adapters, forms, payment or ordering, the sanitizer, CSP or headers, build isolation in the CLI, auth or secrets handling, `.github/workflows/`, the gate scripts (`scripts/review-gate.mjs`, `scripts/touches-guard.mjs`, `scripts/tenant-guard.mjs`), `.github/CODEOWNERS`, or has the label `security:sensitive` | `approved:security` |
+| touches the rich-text chokepoint or its checks: `packages/core/src/richtext/**`, the `./richtext` export in `packages/core/package.json`, `scripts/boundaries.json`, `scripts/check-boundaries.mjs`, `scripts/check-html-sinks.mjs`, or their fixtures `scripts/test/richtext-*` and `scripts/test/*html-sink*` (ADR 0002 (c)) | `approved:security`, whatever other rows say |
 | changes anything users can see (components, themes, layouts, playground) | `approved:a11y-perf` |
 | adds a user-facing feature or CLI command | the docs update is included, or a linked `type:docs` issue exists |
 
