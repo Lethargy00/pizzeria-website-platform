@@ -1,0 +1,82 @@
+name: Task / feature / component
+description: One unit of work = one PR (≤ ~400 changed lines)
+title: "<type>: "
+labels: ["type:feature"]
+body:
+  - type: markdown
+    attributes:
+      value: "Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/."
+  - type: input
+    id: backlog-id
+    attributes:
+      label: Backlog ID
+      description: "Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues."
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this exists; link to epic, ADRs, sections of PROMPT.md.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: In / Out
+      value: |
+        In: …
+        Out: …
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checkboxes; each must be verifiable by someone else.
+      value: |
+        - [ ] …
+    validations:
+      required: true
+  - type: textarea
+    id: touches
+    attributes:
+      label: Touches
+      description: Exact paths/globs this issue may modify, e.g. packages/ui/src/components/Hero/**
+    validations:
+      required: true
+  - type: textarea
+    id: contracts
+    attributes:
+      label: Contracts
+      description: Consumes / Produces
+      value: |
+        Consumes: …
+        Produces: …
+  - type: textarea
+    id: blocked
+    attributes:
+      label: Blocked by
+      description: One line per blocker, e.g. - #12
+      value: |
+        - #…
+  - type: textarea
+    id: security
+    attributes:
+      label: Security notes
+      description: Filled in by security for anything sensitive, or 'n/a – reviewed by security'
+  - type: textarea
+    id: testplan
+    attributes:
+      label: Test plan
+      description: Unit / component / visual / e2e / a11y – what proves it works
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of done
+      description: 
+      value: |
+        - [ ] Acceptance criteria verified by someone other than the author
+        - [ ] CI green, review matrix satisfied
+        - [ ] Docs updated or docs issue linked

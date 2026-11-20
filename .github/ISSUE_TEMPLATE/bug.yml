@@ -1,0 +1,42 @@
+name: Bug
+description: Something is broken
+title: "bug: "
+labels: ["type:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/."
+  - type: input
+    id: backlog-id
+    attributes:
+      label: Backlog ID
+      description: "Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues."
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: 
+      value: |
+        1. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual
+      description: 
+      value: |
+        Expected: …
+        Actual: …
+    validations:
+      required: true
+  - type: textarea
+    id: tenants
+    attributes:
+      label: Affected tenants / themes / pages
+      description: 
+  - type: textarea
+    id: touches
+    attributes:
+      label: Touches
+      description: Paths the fix may modify (filled in at triage)

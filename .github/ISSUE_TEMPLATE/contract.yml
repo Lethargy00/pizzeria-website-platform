@@ -1,0 +1,43 @@
+name: Contract change
+description: Change a schema, interface or public API (Architect approval required)
+title: "contract: "
+labels: ["type:contract","status:needs-architect"]
+body:
+  - type: markdown
+    attributes:
+      value: "Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/."
+  - type: input
+    id: backlog-id
+    attributes:
+      label: Backlog ID
+      description: "Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues."
+  - type: textarea
+    id: current
+    attributes:
+      label: Current contract
+      description: 
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed contract
+      description: 
+    validations:
+      required: true
+  - type: textarea
+    id: affected
+    attributes:
+      label: Affected open issues and packages
+      description: 
+      value: |
+        - #…
+    validations:
+      required: true
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration plan
+      description: Prefer additive changes
+    validations:
+      required: true
