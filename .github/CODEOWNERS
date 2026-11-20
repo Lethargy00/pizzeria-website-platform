@@ -12,8 +12,6 @@
 /turbo.json                         @Lethargy00  # platform
 /tsconfig.base.json                 @Lethargy00  # platform
 /.npmrc                             @Lethargy00  # platform
-/.github/workflows/                 @Lethargy00  # platform + security review
-/.github/CODEOWNERS                 @Lethargy00  # platform + security review
 /packages/cli/                      @Lethargy00  # platform
 /scripts/                           @Lethargy00  # platform
 
@@ -27,8 +25,6 @@
 /SECURITY.md                        @Lethargy00  # security
 /docs/SECURITY.md                   @Lethargy00  # security
 /docs/THREAT-MODEL.md               @Lethargy00  # security
-/scripts/tenant-guard.mjs           @Lethargy00  # security
-/.github/workflows/security.yml     @Lethargy00  # security
 
 # design-system
 /packages/tokens/                   @Lethargy00  # design-system
@@ -47,3 +43,26 @@
 /docs/guides/                       @Lethargy00  # docs
 /tenants/                           @Lethargy00  # docs (data only)
 /README.md                          @Lethargy00  # docs
+
+# Security-reviewed paths. Kept LAST: in CODEOWNERS the last matching pattern wins, so these
+# override the broader role entries above. Changing or removing any of them needs security review.
+
+# Gate integrity (#94, THREAT-MODEL T13): the workflows and the scripts that judge PRs.
+/.github/workflows/                 @Lethargy00  # platform + security review
+/scripts/review-gate.mjs            @Lethargy00  # platform + security review
+/scripts/touches-guard.mjs          @Lethargy00  # platform + security review
+/scripts/*-guard.mjs                @Lethargy00  # platform + security review
+/scripts/lib/                       @Lethargy00  # platform + security review (shared by the gates)
+/scripts/tenant-guard.mjs           @Lethargy00  # security
+/.github/workflows/security.yml     @Lethargy00  # security
+/.github/CODEOWNERS                 @Lethargy00  # platform + security review
+
+# Rich-text chokepoint (ADR 0002 Enforcement (c), #81). Mirrors RICHTEXT_PATHS in
+# scripts/review-gate.mjs, which requires approved:security for every path below.
+/packages/core/src/richtext/        @Lethargy00  # backend + security review (renderMarkdown, sanitize schema)
+/packages/core/package.json         @Lethargy00  # backend + security review (the ./richtext export)
+/scripts/boundaries.json            @Lethargy00  # architect + security review (ADR 0002 (a), #79)
+/scripts/check-boundaries.mjs       @Lethargy00  # platform + security review (ADR 0002 (a), #79)
+/scripts/check-html-sinks.mjs       @Lethargy00  # platform + security review (ADR 0002 (b), (d), #80)
+/scripts/test/richtext-*            @Lethargy00  # platform + security review (fixtures for (a))
+/scripts/test/*html-sink*           @Lethargy00  # platform + security review (fixtures for (b), (d))
