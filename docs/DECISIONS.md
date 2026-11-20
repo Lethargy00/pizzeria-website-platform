@@ -6,10 +6,10 @@ Recorded by `orchestrator` on 2026-11-20.
 
 ## Business and scope
 
-1. **Q1.1 Platform name:** `pizzeria-website-platform`. Workspace package scope `@pwp/*`, CLI binary `pwp`. — `user` (short forms: `default`)
+1. **Q1.1 Platform name:** `pizzeria-website-platform`. Workspace package scope `@pwp/*`, CLI binary `pwp`. — `user`
 2. **Q1.2 Countries:** Sweden only. — `user`
 3. **Q1.3 Languages:** Swedish (`sv`) and English (`en`). Each tenant picks one or both; `sv` is the default locale. — `default`
-4. **Q1.4 Currency:** SEK only. Prices are stored as integer öre, shown in kronor (`kr`). — `default`
+4. **Q1.4 Currency:** SEK only, for display. Menu prices are shown exactly as the tenant enters them (consumer prices, VAT included); the platform does no VAT calculation (see 56). — `default`
 5. **Q1.5 Scale:** 5 tenants in year 1, 50 in year 3. — `default`
 6. **Q1.6 Operator:** agency/franchise. The platform team onboards tenants; no self-signup. — `default`
 7. **Q1.7 Multiple locations:** yes. 1..n locations per tenant, with menu and price overrides per location. — `default`
@@ -31,7 +31,7 @@ Recorded by `orchestrator` on 2026-11-20.
 17. **Q3.4 Island library:** Preact or Solid, whichever is smaller for the needs. Final choice via ADR + `type:dependency` issue. — `default`
 18. **Q3.5 Package manager / monorepo tool:** pnpm workspaces + Turborepo. — `default`
 19. **Q3.6 Node version:** current Active LTS, pinned in `.nvmrc` and `engines`. Exact major to be confirmed by `platform` in M1. — `default`
-20. **Q3.7 Database:** none in v1 unless ordering is enabled; then managed Postgres behind a repository interface, SQLite adapter for dev/tests. — `default`
+20. **Q3.7 Database:** none in v1 (no ordering, see 32). — `default`
 
 ## Customization and theming
 
@@ -49,9 +49,9 @@ Recorded by `orchestrator` on 2026-11-20.
 29. **Q5.1 Menu:** everything listed, in v1. — `default`
 30. **Q5.2 Opening hours:** in v1. Time zone `Europe/Stockholm`; Swedish public holidays (incl. midsommarafton, julafton, nyårsafton as common closing days) supported as data. — `default`
 31. **Q5.3 Locations/maps:** in v1; static map image or click-to-load map, nothing third-party before consent. — `default`
-32. **Q5.4 Online ordering:** v1 as an optional module, off per tenant by default; "order via external link" also supported. — `default`
-33. **Q5.5 Payments:** provider-agnostic interface. First adapter: Stripe Checkout (hosted). Regional adapters for Sweden: **Swish** and **Klarna**, each behind the same interface (mock first; real adapters need credentials, see `docs/SETUP.md`). Pay-at-pickup always available. — `default`
-34. **Q5.6 Delivery:** in the ordering module, Swedish postal-code (postnummer, 5 digits) based zones, minimum order and fee per zone. — `default`
+32. **Q5.4 Online ordering:** **not in v1.** No cart, checkout or order handling. v1 supports "order via external link" (a delivery platform or the pizzeria's own system) and click-to-call per location. The full ordering module moves to the `Later` milestone. — `user` ("forget about payments"; moving ordering to Later is the Orchestrator's reading, since it depends on payments)
+33. **Q5.5 Payments:** **out of scope.** No payment providers or adapters, no Stripe, Swish or Klarna, no webhooks. — `user`
+34. **Q5.6 Delivery zones:** *later*, with the ordering module. v1 may show delivery areas as plain text per location. — `user` (follows from 32)
 35. **Q5.7 Reservations:** request form (email) or external booking link in v1; full reservations *later*. — `default`
 36. **Q5.8 CMS:** *later*; content interface defined now. — `default`
 37. **Q5.9 Contact / catering forms:** in v1, with spam protection and rate limiting. — `default`
@@ -65,7 +65,7 @@ Recorded by `orchestrator` on 2026-11-20.
 
 43. **Q6.1 Content format:** YAML for structured data, plain Markdown for prose, validated with Zod. — `default`
 44. **Q6.2 SEO:** per-page meta, Open Graph, sitemap, robots.txt, canonical, hreflang (`sv-SE`, `en`), schema.org `Restaurant` / `Menu` / `OpeningHoursSpecification`. — `default`
-45. **Q6.3 Performance budget:** Lighthouse ≥ 95 in all four categories on mid-range mobile; JS ≤ 50 KB gz (≤ 120 KB with ordering); LCP < 2.0 s. — `default`
+45. **Q6.3 Performance budget:** Lighthouse ≥ 95 in all four categories on mid-range mobile; JS ≤ 50 KB gz per page; LCP < 2.0 s. — `default`
 46. **Q6.4 Images:** build-time AVIF/WebP, `srcset`, explicit dimensions, lazy loading, EXIF stripped. — `default`
 47. **Q6.5 Analytics:** none by default; optional cookieless adapter per tenant. — `default`
 
@@ -82,11 +82,7 @@ Recorded by `orchestrator` on 2026-11-20.
 ## Security and compliance
 
 55. **Q8.1 Compliance (Sweden):** GDPR (enforced by IMY); cookie consent under the Swedish Electronic Communications Act (LEK); EU food-information regulation 1169/2011 for allergen information (Livsmedelsverket guidance); Swedish price-information and marketing law (prices to consumers shown including VAT). Template privacy, cookie and terms pages per tenant, marked "template – have this reviewed by a lawyer". — `default`
-56. **VAT model (Sweden):** VAT depends on how the food is sold and on the date, so `packages/core` reads rates from a **dated rate table in config**, never hard-coded:
-    - takeaway and delivery food and non-alcoholic drinks: **6%** from 2026-04-01 to 2027-12-31 (temporary cut), 12% before and after unless the law changes;
-    - food and drink served on site (dine-in): **12%**;
-    - alcoholic drinks: **25%**.
-    Each menu item carries a VAT category; the order's fulfillment mode (pickup / delivery / dine-in) and order date pick the rate. Sources: Skatteverket, Regeringen (2026). Must be re-checked before 2028-01-01; an issue in the `Later` milestone tracks that. — `default` (derived from Q1.2)
+56. **VAT:** **out of scope.** The platform does not compute, split or display VAT. Tenants enter final consumer prices. — `user`
 57. **Q8.2 Security baseline:** OWASP ASVS Level 2 for server-side code, OWASP Top 10, plus PROMPT.md Section 6. — `default`
 58. **Q8.3 Cookie consent:** nothing non-essential before consent; banner only when a tenant enables something that needs it. — `default`
 59. **Q8.4 Repo admin / security review:** recommended setup documented in `docs/SECURITY.md`: CODEOWNERS for `packages/` and `.github/`, branch protection, two-person review on `main`. See 74 for the current limitation. — `default`
@@ -115,7 +111,7 @@ Recorded by `orchestrator` on 2026-11-20.
 
 ## Environment notes (facts about where the agents run, not choices)
 
-76. **No GraphQL from agent sessions.** `gh` commands that use GraphQL (`gh issue list`, `gh pr list`, `gh pr create`, `gh issue edit`, Projects) fail. Agents use the REST equivalents via `gh api repos/Lethargy00/pizzeria-website-platform/...`. The `gh` commands in `AGENTS.md` describe intent; the REST mapping is in `docs/agents/gh-rest.md`.
+76. **No GraphQL from agent sessions.** `gh` commands that use GraphQL (`gh issue list`, `gh pr list`, `gh pr create`, `gh issue edit`, Projects) fail. Agents use the REST equivalents via `gh api repos/Lethargy00/pizzeria-website-platform/...`. The `gh` commands in `AGENTS.md` describe intent; the REST mapping is in `docs/agents/gh-rest.md`. This is a deliberate block in the network layer of the cloud agent sessions, not a token or scope problem, so it can't be fixed from inside a session. Agents running in Claude Code on the human's own machine (with their own `gh auth login`) don't have this limit; there, the porcelain `gh` commands and a Projects board work.
 77. **No branch protection.** GitHub refuses branch protection and rulesets on this private repo on the current (free) plan. Until the repo is upgraded or made public, `review-gate`, `tenant-guard` and `touches-guard` cannot be *required* checks; the Orchestrator must check them before every merge. Listed in `docs/HANDOFF.md`.
 78. **No GitHub Actions API.** Workflow runs can't be read through `gh run` from agent sessions. The Orchestrator reads CI results through `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` and `/status` (verified reachable on 2026-11-20).
 79. **No package installs in agent sessions.** The agents' shell can't reach the npm registry, so `pnpm install` and lockfile generation can't run locally. `pnpm-lock.yaml` must be generated in CI (or by the human) on the first `platform` PR. Tracked as a `status:blocked` risk on the M1 epic.
