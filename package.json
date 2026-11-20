@@ -33,7 +33,7 @@
     "prettier": "3.6.2",
     "turbo": "2.5.4",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.35.0",
+    "typescript-eslint": "8.73.0",
     "vitest": "3.2.4"
   }
 }
