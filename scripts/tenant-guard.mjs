@@ -35,6 +35,10 @@ export const FORBIDDEN_NAMES = [
   /^Makefile$/i,
   /^Dockerfile$/i,
 ];
+// One path segment under assets/. Must stay identical to SEGMENT in
+// packages/schema/src/primitives/asset-ref.ts so every shipped file can be referenced by an AssetRef.
+export const ASSET_SEGMENT = /^[a-z0-9][a-z0-9._-]*$/;
+const ASSETS_PATH = /^[^/]+\/assets\/.+/;
 const TEXT_EXT = new Set(['.yaml', '.yml', '.md']);
 const MAX_TEXT_BYTES = 1_000_000;
 
@@ -88,6 +92,17 @@ function ext(path) {
   return i > 0 ? base.slice(i).toLowerCase() : '';
 }
 
+function suggest(name) {
+  const s = name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[^a-z0-9]+/, '');
+  return s || 'file';
+}
+
 /** Returns a list of { path, rule, message } problems for the tenants root. */
 export function checkTenants(root) {
   const problems = [];
@@ -107,6 +122,18 @@ export function checkTenants(root) {
         path: at,
         rule: 'forbidden-file',
         message: `"${name}" is not allowed. Tenants have no dependencies, package files or build steps; the platform provides everything.`,
+      });
+      continue;
+    }
+    if (
+      ASSETS_PATH.test(e.path) &&
+      !ALLOWED_NAMES.has(name) &&
+      (!ASSET_SEGMENT.test(name) || name.includes('..'))
+    ) {
+      problems.push({
+        path: at,
+        rule: 'asset-name',
+        message: `"${name}" is not a valid asset name. Names under assets/ must be lowercase letters, digits, "-", "_" or "." and start with a letter or digit (no spaces, uppercase or non-ASCII), or no AssetRef can point to it. Rename it, e.g. "${suggest(name)}".`,
       });
       continue;
     }
