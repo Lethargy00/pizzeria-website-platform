@@ -9,7 +9,7 @@ Facts about the sandbox agents run in, and how to work within them. These descri
 
 ## Node version: sandbox is 22, repo pins 26
 
-- The sandbox provides **Node 22** (for example `v22.23.5`). The repo pins `engines.node` to `>=26.0.0 <27` in `package.json`, and `.npmrc` sets `engine-strict=true`.
+- The sandbox provides **Node 22** (for example `v22.23.5`). The repo develops and tests on Node 26 only (`.nvmrc` = `26`, and every CI job reads it). `engines.node` in `package.json` is `>=24.0.0 <27` (DECISIONS 82); Node 24 is accepted only so Dependabot's updater can run, and is not tested. `.npmrc` sets `engine-strict=true`, so Node 22 is still rejected.
 - Because of that, a plain `pnpm install` or `pnpm exec ...` fails with "Your Node version is incompatible".
 - **Workaround, per command only:** prefix the command with `npm_config_engine_strict=false`, for example:
 
