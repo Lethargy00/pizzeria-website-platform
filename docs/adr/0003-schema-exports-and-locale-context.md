@@ -20,7 +20,7 @@ This ADR settles these points before #52 starts. It also binds #24 (sections), #
 ### Exports
 
 - **Explicit subpaths in every package.** Rejected for `@pwp/schema`. Each schema folder is its own parallel issue whose Touches cover only that folder (#23 `errors/**`, #24 `sections/**`, #25 `menu/**`, #34 `theme/**`, #52 `site-config/**`, #64 `adapters/**`). With explicit entries, every one of them would also edit `package.json`. That breaks the non-overlapping-Touches rule and makes `package.json` the hand-edited central registry that ADR 0001 forbids.
-- **The wildcard in every package.** Rejected for `@pwp/core` and `@pwp/adapters`. Their public surface is chosen on purpose: adapter implementations are not public API, and `./richtext` is separate so that the pipeline stays out of client bundles (ADR 0002). A wildcard would publish every folder by accident.
+- **The wildcard in every package.** Rejected for `@pwp/core` and `@pwp/adapters`. Their public surface is chosen on purpose: adapter implementations are not public API, and the planned `./richtext` subpath of `@pwp/core` (ADR 0002, #47) is separate so that the pipeline stays out of client bundles (ADR 0002). A wildcard would publish every folder by accident.
 - **Wildcard in `@pwp/schema` only, explicit subpaths everywhere else** (chosen).
 
 ### How `SiteConfig` gets its locales
@@ -52,7 +52,7 @@ This ADR settles these points before #52 starts. It also binds #24 (sections), #
   - A folder name is public API. Renaming or removing a folder, or removing an export from its `index.ts`, is a `type:contract` change.
   - `@pwp/schema/sections` is served by the generated `src/sections/index.ts` (#24). Component `schema.ts` files import from `@pwp/schema/sections`, never from a per-type file.
   - Fixtures that other packages need (for example the #51 harness) are exposed on purpose through their own folder (for example `src/fixtures/index.ts`) in the issue that needs them, never through a deep import.
-- **Inside `@pwp/schema`**, a folder imports another folder only through that folder's `index.ts` (`../primitives/index.js`), never a deep file. The internal surface then matches the public one.
+- **Inside `@pwp/schema`**, production source files import another schema folder only through that folder's `index.ts` (`../primitives/index.js`), never a deep file. The internal surface then matches the public one. One exception: test files and `fixtures.ts` files may also import another folder's `fixtures.ts`, because neither is published.
 - `pnpm check-boundaries` keys on the package name and ignores subpaths, so it needs no change.
 
 ### 2. The `LocaleContext` rule
@@ -97,7 +97,7 @@ Binding on every schema in `@pwp/schema` that contains text a visitor can see:
 ## Consequences
 
 - New schema folders need no edit to shared files. The cost: any `src/<x>/index.ts`, nested or not, is public the moment it exists. Reviewers check new `index.ts` files in `@pwp/schema` as public API changes.
-- `@pwp/core` and `@pwp/adapters` keep a curated surface. The rich-text isolation from ADR 0002 is unaffected.
+- `@pwp/core` and `@pwp/adapters` keep a curated surface. The rich-text isolation from ADR 0002, through the planned `./richtext` subpath (ADR 0002, #47), is unaffected.
 - One code path and one error shape for every localized field, the site config included. The price is a second, very small validation pass and a `parseSiteConfig` entry point that loaders must use.
 - Tenants see all errors in one run, except when `locales` itself is broken.
 - Every schema with visitor-facing text is a function. Tests and the playground (#51) build a `LocaleContext` explicitly, for example `{ locales: ['sv', 'en'] }`.
