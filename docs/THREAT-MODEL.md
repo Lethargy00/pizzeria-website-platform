@@ -54,16 +54,17 @@ Boundaries: (B1) visitor ↔ site/functions; (B2) tenant content ↔ build; (B3)
 Decision: **receipts are off in v1.** No handler sends email to an address the visitor typed. This is binding for #50 and all form handlers (contact, catering, reservation request).
 
 - Threat: anyone can make a tenant's domain send mail to any address (mail-bombing a victim, relaying spam, burning the sender's reputation), even with per-IP limits, because attackers rotate IPs and target one recipient.
-- Mitigation: no code path accepts a recipient from request input; notification mail goes only to the tenant's configured address. The email adapter contract is exercised in tests to prove this.
+- Mitigation: no code path accepts a recipient from request input. `To`, `Cc`, `Bcc` and `From` never come from request input; the visitor's email may appear at most as a validated single-line `Reply-To`; any Subject text has CR and LF stripped, or is not taken from input at all. Notification mail goes only to the tenant's configured address. The email adapter contract takes no request-derived `to`. The #50 handler test asserts all of this on the adapter call (recipient, `Cc`, `Bcc`, `From`, `Reply-To` and Subject).
 - Residual risk: low. A tenant's own inbox can still be flooded by form spam, which is covered by T5 (honeypot, CAPTCHA, rate limits).
 
 A later opt-in (a new issue, security review required, and an update to this model) must meet all of:
 
 1. A per-recipient rate limit (keyed on a hash of the normalized address, in addition to per-IP and per-tenant limits), with a low daily cap per address.
 2. A fixed template: no attacker-controlled free text in the subject or body (no name, message or any other submitted field echoed back), no links built from input.
-3. Recipient confirmation before any further mail (double opt-in style), or an equivalent proof of address ownership.
+3. Recipient confirmation before any further mail, or an equivalent proof of address ownership. The confirmation message is itself mail to an unverified address, so conditions 1, 2 and 4 apply to it too, and its token is single-use and expiring.
 4. Off by default per tenant, with the sender domain properly authenticated (SPF, DKIM, DMARC) and a bounce and complaint handling path.
 5. No PII of the recipient in logs (T7) and tests for each condition above.
+6. The opt-in PR is labelled `security:sensitive`, and the adapter contract still takes no request-derived `to` unless the architect and security have approved the change to it.
 
 ## Open findings at M1
 
