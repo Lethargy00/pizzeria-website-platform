@@ -120,17 +120,20 @@ export type AdapterErrorCode =
   | 'unavailable';
 
 /** Codes after which the same call may be retried (with backoff and the same idempotency key). */
-export const RETRYABLE_ADAPTER_ERROR_CODES: readonly AdapterErrorCode[] = [
+export const RETRYABLE_ADAPTER_ERROR_CODES: readonly AdapterErrorCode[] = Object.freeze([
   'throttled',
   'timeout',
   'unavailable',
-];
+] as const);
 
 /**
  * The only error type adapters throw. Any other thrown value is a bug in the adapter.
  *
- * `message` must not contain PII, secrets, env var values or provider response bodies: it may
- * be logged. Put the provider's raw error in `cause` only if it is free of PII.
+ * `message` and `cause` follow the same rule, because loggers usually serialise `cause` too:
+ * neither may contain PII, secrets, env var values, target URLs (e.g. `WEBHOOK_URL`, which is
+ * secret) or provider response bodies. HTTP client errors often embed the request URL, so
+ * don't pass them through as `cause`. Instead, use a new PII-free `Error` that describes the
+ * failure class, or omit `cause`.
  */
 export class AdapterError extends Error {
   override readonly name = 'AdapterError';

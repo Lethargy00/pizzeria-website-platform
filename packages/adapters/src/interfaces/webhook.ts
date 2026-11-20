@@ -20,9 +20,29 @@
  * message = {@link webhookSigningInput}(timestamp, rawBody)), where `rawBody` is the exact UTF-8
  * request body. Each retry is re-signed with a fresh timestamp.
  *
- * Receivers must: recompute the HMAC over the raw body before parsing JSON; compare in constant
- * time against every `v1=` entry; reject when `|now - timestamp| > WEBHOOK_TOLERANCE_SECONDS`;
- * de-duplicate on `X-PWP-Idempotency-Key`.
+ * Receivers must:
+ * - recompute the HMAC over the raw body before parsing JSON;
+ * - compare in constant time against every `v1=` entry, **ignore entries with an unknown
+ *   version** (never treat them as valid), and reject when no `v1=` entry matches;
+ * - reject when `|now - timestamp| > WEBHOOK_TOLERANCE_SECONDS`;
+ * - de-duplicate on `X-PWP-Idempotency-Key`, keeping seen keys for **at least**
+ *   `WEBHOOK_TOLERANCE_SECONDS` (24 h recommended, to also cover retries). Inside the tolerance
+ *   window a captured request replays with a valid signature, so this is the replay defence.
+ *
+ * ## SSRF duties of every sending adapter (THREAT-MODEL T14)
+ *
+ * `WEBHOOK_URL` is tenant-configured, so a real adapter must:
+ * - accept `https:` only, and follow no redirects;
+ * - resolve the host and **refuse** the delivery when any resolved address is loopback,
+ *   private (RFC 1918), link-local (incl. `169.254.169.254` cloud metadata), CGNAT
+ *   (`100.64.0.0/10`), unique-local (`fc00::/7`), multicast or unspecified (`0.0.0.0`, `::`),
+ *   including the IPv4-mapped IPv6 forms of these (`::ffff:a.b.c.d`). Refusal is
+ *   `AdapterError` code `misconfigured`, and its message does not contain the URL or the address;
+ * - **connect to the vetted IP** (keeping the original host for TLS SNI and `Host`), so DNS
+ *   rebinding can't swap the address between the check and the connect;
+ * - apply a timeout to **each attempt**, as well as the overall `AdapterCallOptions.timeoutMs`;
+ * - read at most a small capped prefix of the response body (≤ 4 KiB), only to drain the
+ *   connection. It is never logged, put into an error `message` or `cause`, or returned.
  */
 
 import type { AdapterCallOptions } from './index.js';
@@ -104,9 +124,10 @@ export interface WebhookDeliveryResult {
  * Delivers one event to the tenant's webhook URL.
  *
  * - Resolves when the receiver answered `2xx`.
- * - Rejects only with `AdapterError`: `misconfigured` (no or non-https URL, weak secret),
- *   `rejected` (`4xx` other than 408/429), `throttled` (429), `timeout`, `unavailable` (`5xx`,
- *   network). Redirects are not followed (`rejected`).
+ * - Rejects only with `AdapterError`: `misconfigured` (no or non-https URL, weak secret, or a
+ *   resolved address refused by the SSRF rules in this file's header), `rejected` (`4xx` other
+ *   than 408/429), `throttled` (429), `timeout`, `unavailable` (`5xx`, network). Redirects are
+ *   not followed (`rejected`).
  * - Never logs `event.data`, the URL or the secret. Logs at most `id`, `type`, status, attempts.
  */
 export interface WebhookNotifier {

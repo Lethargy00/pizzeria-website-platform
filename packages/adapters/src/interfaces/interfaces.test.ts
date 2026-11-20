@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ADAPTER_NAMES,
   AdapterError,
+  RETRYABLE_ADAPTER_ERROR_CODES,
   WEBHOOK_TOLERANCE_SECONDS,
   webhookSigningInput,
 } from './index.js';
@@ -66,6 +67,7 @@ describe('adapter contracts', () => {
     expect(e.name).toBe('AdapterError');
     expect(e.retryable).toBe(true);
     expect(new AdapterError('email', 'mock-email', 'rejected', 'x').retryable).toBe(false);
+    expect(Object.isFrozen(RETRYABLE_ADAPTER_ERROR_CODES)).toBe(true);
   });
 
   it('webhook signing input is "<timestamp>.<rawBody>"', () => {
