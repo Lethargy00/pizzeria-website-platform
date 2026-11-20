@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AdapterError } from '../interfaces/index.js';
 import type { EmailMessage } from '../interfaces/index.js';
-import { createMockEmailSender, factory } from './index.js';
+import {
+  MAX_EMAIL_NAME,
+  MAX_IDEMPOTENCY_KEY,
+  MAX_REMEMBERED_MESSAGES,
+  createMockEmailSender,
+  factory,
+} from './index.js';
 
 const MSG: EmailMessage = {
   to: [{ address: 'info@pizzeria.example' }],
@@ -139,6 +145,60 @@ describe('mock-email', () => {
     expect(
       await code(sender.send({ ...MSG, to: Array(10).fill(a) as unknown as EmailMessage['to'] })),
     ).toBe('none');
+  });
+
+  it('rejects CR/LF in a display name (header injection, #100)', async () => {
+    const { sender } = make();
+    for (const name of ['Anna\r\nBcc: evil@attacker.example', 'Anna\nX', 'Anna\rX']) {
+      const replyTo = { address: 'anna@visitor.example', name };
+      await expect(sender.send({ ...MSG, replyTo })).rejects.toMatchObject({
+        code: 'invalid_input',
+        message: expect.stringContaining('name contains CR/LF') as string,
+      });
+      await expect(
+        sender.send({ ...MSG, to: [{ address: 'info@pizzeria.example', name }] }),
+      ).rejects.toMatchObject({ code: 'invalid_input' });
+    }
+    expect(sender.outbox).toHaveLength(0);
+  });
+
+  it('rejects other control characters and an over-long display name (#100)', async () => {
+    const { sender } = make();
+    const reject = async (name: string): Promise<void> => {
+      const replyTo = { address: 'anna@visitor.example', name };
+      expect(await code(sender.send({ ...MSG, replyTo }))).toBe('invalid_input');
+    };
+    await reject('Anna\u0000');
+    await reject('Anna\tAndersson');
+    await reject('Anna\u007f');
+    await reject('a'.repeat(MAX_EMAIL_NAME + 1));
+    const ok = { address: 'anna@visitor.example', name: 'å'.repeat(MAX_EMAIL_NAME) };
+    expect(await code(sender.send({ ...MSG, replyTo: ok }))).toBe('none');
+  });
+
+  it('caps the idempotency key length (#100)', async () => {
+    const { sender } = make();
+    const long = 'k'.repeat(MAX_IDEMPOTENCY_KEY + 1);
+    expect(await code(sender.send({ ...MSG, idempotencyKey: long }))).toBe('invalid_input');
+    const max = 'k'.repeat(MAX_IDEMPOTENCY_KEY);
+    expect(await code(sender.send({ ...MSG, idempotencyKey: max }))).toBe('none');
+  });
+
+  it('remembers at most MAX_REMEMBERED_MESSAGES keys, forgetting the oldest (#100)', async () => {
+    const { sender } = make();
+    for (let i = 0; i <= MAX_REMEMBERED_MESSAGES; i++) {
+      await sender.send({ ...MSG, idempotencyKey: `k-${String(i)}` });
+    }
+    expect(sender.outbox).toHaveLength(MAX_REMEMBERED_MESSAGES);
+    expect(sender.outbox[0]?.message.idempotencyKey).toBe('k-1');
+    // The newest key is still de-duplicated; the forgotten oldest one is sent again.
+    const newest = sender.outbox[MAX_REMEMBERED_MESSAGES - 1]?.messageId;
+    const again = await sender.send({
+      ...MSG,
+      idempotencyKey: `k-${String(MAX_REMEMBERED_MESSAGES)}`,
+    });
+    expect(again.messageId).toBe(newest);
+    expect(sender.outbox).toHaveLength(MAX_REMEMBERED_MESSAGES);
   });
 
   it('factory requires EMAIL_FROM without CR/LF', () => {
