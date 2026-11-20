@@ -32,11 +32,12 @@ const MAILTO_QUERY_PARAM = /^(?:subject|body)=[A-Za-z0-9%._~!$'()*+,;:@/?-]*$/;
 const TEL_BODY = /^\+?[0-9().-]{3,32}$/;
 
 /**
- * The canonical authority a tenant must write: lowercase ASCII host, optional port. No userinfo,
+ * The canonical authority a tenant must write: lowercase ASCII host, optional port 1–65535 (the
+ * parser rejects anything above 65535; no leading zeros, no port 0). No userinfo,
  * no percent-encoding, no Unicode (an IDN must be written in its visible `xn--` form), no
  * fullwidth or ideographic dots.
  */
-const RAW_AUTHORITY = /^[a-z0-9.-]+(:\d{1,5})?$/;
+const RAW_AUTHORITY = /^[a-z0-9.-]+(:[1-9]\d{0,4})?$/;
 /** One DNS label: not empty, and no hyphen at the start or end. */
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 /** A top-level label that is all digits or `0x…` means the parser read the host as an IPv4 address. */

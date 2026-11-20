@@ -119,6 +119,8 @@ export const safeUrlFixtures: Fixtures = {
     'https://xn--exmple-cua.se/',
     'https://a-b.c-d.se/x',
     'https://x.se:8080?q=1',
+    'https://x.se:1/',
+    'https://x.se:65535/',
     'https://x.se#top',
     'mailto:info@pizzeria-roma.se',
     'mailto:info@pizzeria-roma.se?subject=Bokning',
@@ -214,6 +216,9 @@ export const safeUrlFixtures: Fixtures = {
     'https://EXAMPLE.COM/',
     'https://x.se:443/',
     'https://x.se:99999/',
+    'https://x.se:65536/',
+    'https://x.se:0/',
+    'https://x.se:08080/',
     'https://x.se:/',
     // IP literals in any form (#107 F1)
     'https://127.0.0.1',
