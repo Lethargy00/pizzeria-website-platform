@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import {
   HOLIDAY_IDS,
-  HOURS_ISSUE_CODES,
   HOURS_TIME_ZONE,
   TimeInterval,
   WEEKDAYS,
@@ -121,7 +120,7 @@ describe('hoursSchema', () => {
       {
         path: ['locations', 0, 'weekly', 'tuesday', 0],
         code: 'custom',
-        pwpCode: 'overlapping_intervals',
+        pwpCode: undefined,
       },
     ]);
   });
@@ -134,7 +133,7 @@ describe('hoursSchema', () => {
       {
         path: ['locations', 0, 'weekly', 'saturday', 0],
         code: 'custom',
-        pwpCode: 'overlapping_intervals',
+        pwpCode: undefined,
       },
     ]);
   });
@@ -151,7 +150,7 @@ describe('hoursSchema', () => {
       {
         path: ['locations', 0, 'weekly', 'monday', 0],
         code: 'custom',
-        pwpCode: 'overlapping_intervals',
+        pwpCode: undefined,
       },
     ]);
   });
@@ -176,14 +175,14 @@ describe('hoursSchema', () => {
 
   it('requires exactly one of closed and intervals', () => {
     expect(issues(location({ holidays: [{ holiday: 'julafton' }] }))).toEqual([
-      { path: ['locations', 0, 'holidays', 0], code: 'custom', pwpCode: 'closed_or_intervals' },
+      { path: ['locations', 0, 'holidays', 0], code: 'custom', pwpCode: undefined },
     ]);
     const both = { closed: true, intervals: [{ open: '11:00', close: '13:00' }] };
     expect(issues(location({ exceptions: [{ date: '2026-12-24', ...both }] }))).toEqual([
       {
         path: ['locations', 0, 'exceptions', 0, 'intervals'],
         code: 'custom',
-        pwpCode: 'closed_or_intervals',
+        pwpCode: undefined,
       },
     ]);
   });
@@ -194,12 +193,12 @@ describe('hoursSchema', () => {
       {
         path: ['locations', 0, 'holidays', 1, 'holiday'],
         code: 'custom',
-        pwpCode: 'duplicate_entry',
+        pwpCode: undefined,
       },
     ]);
     const entry = minimalHours.locations[0];
     expect(issues({ locations: [entry, entry] })).toEqual([
-      { path: ['locations', 1, 'location'], code: 'custom', pwpCode: 'duplicate_entry' },
+      { path: ['locations', 1, 'location'], code: 'custom', pwpCode: undefined },
     ]);
   });
 
@@ -214,7 +213,7 @@ describe('hoursSchema', () => {
       {
         path: ['locations', 0, 'exceptions', 0, 'date'],
         code: 'custom',
-        pwpCode: 'overlapping_dates',
+        pwpCode: undefined,
       },
     ]);
   });
@@ -225,7 +224,7 @@ describe('hoursSchema', () => {
       {
         path: ['locations', 0, 'exceptions', 0, 'until'],
         code: 'custom',
-        pwpCode: 'invalid_range',
+        pwpCode: undefined,
       },
     ]);
   });
@@ -265,17 +264,21 @@ describe('hoursSchema', () => {
     expect(issue?.message).toBe('The interval 14:00–22:00 overlaps 11:00–15:00 on the same day.');
   });
 
-  it('raises only the documented custom codes', () => {
-    const seen = new Set<string>();
+  it('writes a full sentence on every custom issue without a pwpCode', () => {
+    let count = 0;
     for (const input of hoursFixtures.invalid) {
       for (const issue of hoursSchema(svEn).safeParse(input).error?.issues ?? []) {
+        if (issue.code !== 'custom') continue;
         const code = (issue as { params?: { pwpCode?: string } }).params?.pwpCode;
-        if (code !== undefined) seen.add(code);
+        if (code !== undefined) {
+          expect(code).toBe('missing_locale');
+          continue;
+        }
+        count += 1;
+        expect(issue.message).toMatch(/^[A-Z`].*\.$/);
+        expect(issue.message).not.toMatch(/^Invalid input/);
       }
     }
-    for (const code of seen) {
-      expect([...HOURS_ISSUE_CODES, 'missing_locale']).toContain(code);
-    }
-    expect(seen).toEqual(new Set([...HOURS_ISSUE_CODES, 'missing_locale']));
+    expect(count).toBeGreaterThan(10);
   });
 });

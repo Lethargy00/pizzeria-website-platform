@@ -61,40 +61,20 @@ export type HolidayId = z.infer<typeof HolidayId>;
 
 /** Most opening intervals on one day (for example lunch and dinner, plus a late slot). */
 export const MAX_INTERVALS_PER_DAY = 4;
-/** Most locations in one `hours.yaml`. */
-export const MAX_HOURS_LOCATIONS = 20;
+/** Most locations in one `hours.yaml`; equal to `MAX_LOCATIONS` of `locations.yaml` (#27). */
+export const MAX_HOURS_LOCATIONS = 50;
 /** Most dated exceptions per location. Old ones can be deleted once they have passed. */
 export const MAX_EXCEPTIONS = 100;
 /** Longest exception period (`date` to `until`, both included), in days. */
 export const MAX_EXCEPTION_DAYS = 366;
 
-/**
- * Codes of the custom issues this schema raises, in `params.pwpCode`. They are not in the closed
- * `CUSTOM_ISSUE_CODES` list of the error contract (#23) yet, so the error mapping falls back to
- * code `invalid` and shows the English `message` written here. Adding them to #23 is a
- * `type:contract` follow-up; the issues need no change for it.
+/*
+ * Custom checks (overlaps, duplicates, `closed` or `intervals`, periods) raise a `custom` issue
+ * with a full English `message` and no `pwpCode`, like `@pwp/schema/locations` (#124): the closed
+ * `CUSTOM_ISSUE_CODES` list of the error contract (#23) has no code for them yet, so the mapping
+ * shows the message under code `invalid`. #125 proposes `duplicate_id` and `requires_field`;
+ * once codes exist, the issues here gain `params` and nothing else changes.
  */
-export const HOURS_ISSUE_CODES = [
-  /** Two intervals overlap, on one day or through overnight hours into the next day. */
-  'overlapping_intervals',
-  /** Two exceptions cover the same date. */
-  'overlapping_dates',
-  /** The same location or holiday is listed twice. */
-  'duplicate_entry',
-  /** A day override has both `closed` and `intervals`, or neither. */
-  'closed_or_intervals',
-  /** An interval opens and closes at the same time (other than `00:00`–`00:00`). */
-  'invalid_interval',
-  /** An exception's `until` is before its `date`, or the period is too long. */
-  'invalid_range',
-] as const;
-export type HoursIssueCode = (typeof HOURS_ISSUE_CODES)[number];
-
-export interface HoursIssueParams {
-  readonly pwpCode: HoursIssueCode;
-}
-
-const params = (pwpCode: HoursIssueCode): HoursIssueParams => ({ pwpCode });
 
 const MINUTES_PER_DAY = 1440;
 
@@ -136,7 +116,6 @@ export const TimeInterval = strictObject({ open: TimeOfDay, close: TimeOfDay }).
         path: ['close'],
         message:
           'The interval opens and closes at the same time. For a whole day open, write `00:00` to `00:00`.',
-        params: params('invalid_interval'),
       });
     }
   },
@@ -164,7 +143,6 @@ function checkOverlaps(
         code: 'custom',
         path: pathOf(current.index),
         message: `The interval ${span(current.interval)} overlaps ${span(latest.interval)} on the same day.`,
-        params: params('overlapping_intervals'),
       });
     }
     if (!latest || current.end > latest.end) latest = current;
@@ -202,7 +180,6 @@ export const WeeklySchedule = strictObject({
             code: 'custom',
             path: [next, index],
             message: `The interval ${span(other)} overlaps the overnight hours ${span(interval)} from ${day}.`,
-            params: params('overlapping_intervals'),
           });
         }
       });
@@ -225,14 +202,12 @@ function checkClosedOrIntervals(
       code: 'custom',
       path: ['intervals'],
       message: 'Use either `closed: true` or `intervals`, not both.',
-      params: params('closed_or_intervals'),
     });
   } else if (value.closed === undefined && !hasIntervals) {
     ctx.addIssue({
       code: 'custom',
       path: [],
       message: 'Give either `closed: true` or the opening `intervals` for this day.',
-      params: params('closed_or_intervals'),
     });
   }
 }
@@ -280,14 +255,12 @@ export function hoursExceptionSchema(ctx: LocaleContext) {
           code: 'custom',
           path: ['until'],
           message: `\`until\` (${value.until}) is before \`date\` (${value.date}).`,
-          params: params('invalid_range'),
         });
       } else if (days > MAX_EXCEPTION_DAYS) {
         refine.addIssue({
           code: 'custom',
           path: ['until'],
           message: `The period is ${days} days long; at most ${MAX_EXCEPTION_DAYS} days are allowed.`,
-          params: params('invalid_range'),
         });
       }
     });
@@ -307,7 +280,10 @@ export function hoursExceptionSchema(ctx: LocaleContext) {
  */
 export function locationHoursSchema(ctx: LocaleContext) {
   return strictObject({
-    /** The location's id from `locations.yaml` (#27). The loader (#53) checks that it exists. */
+    /**
+     * The location's id from `locations.yaml` (#27, `LocationId`): a plain {@link Slug}, so this
+     * schema does not import the locations schema. The loader (#53) checks that it exists.
+     */
     location: Slug,
     weekly: WeeklySchedule,
     holidays: z
@@ -322,7 +298,6 @@ export function locationHoursSchema(ctx: LocaleContext) {
               code: 'custom',
               path: [index, 'holiday'],
               message: `The holiday \`${rule.holiday}\` is listed more than once.`,
-              params: params('duplicate_entry'),
             });
           }
           seen.add(rule.holiday);
@@ -343,7 +318,6 @@ export function locationHoursSchema(ctx: LocaleContext) {
               code: 'custom',
               path: [current.index, 'date'],
               message: `The date ${current.from} is already covered by the exception for ${latest.from === latest.to ? latest.from : `${latest.from} to ${latest.to}`}.`,
-              params: params('overlapping_dates'),
             });
           }
           if (!latest || current.to > latest.to) latest = current;
@@ -370,7 +344,6 @@ export function hoursSchema(ctx: LocaleContext) {
               code: 'custom',
               path: [index, 'location'],
               message: `The location \`${entry.location}\` is listed more than once.`,
-              params: params('duplicate_entry'),
             });
           }
           seen.add(entry.location);
