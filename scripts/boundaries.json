@@ -10,5 +10,34 @@
     "functions": ["schema", "core", "adapters"],
     "cli": ["schema", "core", "tokens", "themes", "ui", "adapters", "functions"],
     "playground": ["schema", "tokens", "themes", "ui"]
+  },
+  "richtext": {
+    "$comment": [
+      "ADR 0002 Enforcement (a) and (f), issue #79. The rich-text chokepoint: only code in allowedIn may turn Markdown into HTML.",
+      "(a) Code under scan (packages/**, playground/**) outside allowedIn may not import restrictedImports (globs over the package name; remark and rehype are the bundles of the remark-*/rehype-* families),",
+      "may not import astro:content (its render() is Astro's own Markdown path; tenant content is loaded by the CLI),",
+      "may not use <Content />, and may not import .md/.mdx files (including import.meta.glob of Markdown).",
+      "(f) bannedTokens may not appear in any text file in the repo (outside node_modules, .git and build output), allowedIn included.",
+      "bannedTokenExceptions lists the only files that may name them: the ADR that bans them and this config.",
+      "Changing or weakening any of this needs security approval and an update to ADR 0002."
+    ],
+    "allowedIn": ["packages/core/src/richtext/**"],
+    "scan": ["packages/**", "playground/**"],
+    "restrictedImports": [
+      "unified",
+      "remark",
+      "remark-*",
+      "rehype",
+      "rehype-*",
+      "hast-*",
+      "mdast-*",
+      "marked",
+      "markdown-it",
+      "sanitize-html",
+      "dompurify",
+      "@astrojs/markdown-*"
+    ],
+    "bannedTokens": ["rehype-raw", "allowDangerousHtml"],
+    "bannedTokenExceptions": ["docs/adr/0002-dependency-placement.md", "scripts/boundaries.json"]
   }
 }
