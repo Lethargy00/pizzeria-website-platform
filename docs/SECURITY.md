@@ -45,3 +45,12 @@ Apply when the plan allows it (see `docs/HANDOFF.md`):
 - One lockfile at the root; CI installs with `--frozen-lockfile`.
 - Every dependency change needs a `type:dependency` issue approved by `architect` and `security`, an exact version and an entry in `docs/DEPENDENCIES.md`.
 - GitHub Actions: pin to full commit SHAs with a version comment (`uses: actions/checkout@<sha> # v4.x.y`). Open finding until done; Dependabot (`github-actions` ecosystem) then keeps SHAs current.
+
+## Dependabot PRs
+
+Dependabot PRs pass through `touches-guard` with an exception (#59). Two things matter to maintainers:
+
+1. **Do not use "Update branch" on a Dependabot PR.** That button adds a commit that is not Dependabot's, so the commit check fails. To rebase the PR, comment `@dependabot recreate` instead.
+2. **The commit check cannot prove a commit came from Dependabot.** A commit made through the Contents or Git Data API with the bot as author is still signed by `web-flow`, so it passes. The real defence is the dependency path allow-list plus the review gate, which always requires `approved:peer` and `approved:security` on a Dependabot PR (and `approved:architect` for dependency files). Never treat a green touches-guard as proof of provenance.
+
+The rules are repeated in the header comment of `scripts/touches-guard.mjs`.

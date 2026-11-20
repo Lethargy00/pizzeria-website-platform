@@ -32,6 +32,8 @@ pnpm test:e2e     # Playwright (no suites yet); first run: pnpm exec playwright 
 
 The `pwp` CLI (`new`, `validate`, `dev`, `build`, `audit`, `preview-themes`) arrives in M5.
 
+Dependabot PRs: do not use "Update branch"; comment `@dependabot recreate` instead. See [Dependabot PRs](SECURITY.md#dependabot-prs).
+
 ## Environment variables
 
 None yet. Each adapter adds a `.env.example` and a section here when it lands (M7).
