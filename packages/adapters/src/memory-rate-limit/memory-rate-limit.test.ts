@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AdapterError } from '../interfaces/index.js';
 import type { RateLimitKey } from '../interfaces/index.js';
-import { createMemoryRateLimitStore, factory } from './index.js';
+import { MAX_LIMIT, createMemoryRateLimitStore, factory } from './index.js';
 
 const key = (scope: string, n = 1): RateLimitKey =>
   `${scope}:${n.toString(16).padStart(64, '0')}` as RateLimitKey;
@@ -138,6 +138,25 @@ describe('memory-rate-limit', () => {
     await expect(s.hit(key('a'), { limit: 1, windowSeconds: 0 })).rejects.toMatchObject({
       code: 'misconfigured',
     });
+  });
+
+  it('caps RateLimitWindow.limit at MAX_LIMIT (#100)', async () => {
+    const s = createMemoryRateLimitStore();
+    await expect(
+      s.hit(key('a'), { limit: MAX_LIMIT + 1, windowSeconds: 60 }),
+    ).rejects.toMatchObject({ code: 'misconfigured' });
+    await expect(
+      s.hit(key('a'), { limit: Number.MAX_SAFE_INTEGER, windowSeconds: 60 }),
+    ).rejects.toMatchObject({ code: 'misconfigured' });
+    expect((await s.hit(key('a'), { limit: MAX_LIMIT, windowSeconds: 60 })).allowed).toBe(true);
+  });
+
+  it('rejects over-long keys (#100)', async () => {
+    const s = createMemoryRateLimitStore();
+    const long = `a:${'0'.repeat(129)}` as RateLimitKey;
+    await expect(s.hit(long, W)).rejects.toMatchObject({ code: 'misconfigured' });
+    const longScope = `${'a'.repeat(33)}:${'0'.repeat(64)}` as RateLimitKey;
+    await expect(s.hit(longScope, W)).rejects.toMatchObject({ code: 'misconfigured' });
   });
 
   it('error messages never echo the key', async () => {

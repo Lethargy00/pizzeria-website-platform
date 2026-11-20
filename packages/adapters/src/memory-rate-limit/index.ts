@@ -6,7 +6,8 @@
  * Algorithm: a log of hit times per key (sliding window log), so it never allows more than
  * `limit` hits in any `windowSeconds` span (stricter than the contract's `2 x limit`).
  * - A rejected hit still counts. At most `limit + 1` times are kept per key (the newest ones),
- *   which gives the same decisions as keeping them all, and bounds memory per key.
+ *   which gives the same decisions as keeping them all, and bounds memory per key. `limit` is
+ *   capped at {@link MAX_LIMIT}, so a caller cannot make one key arbitrarily large.
  * - Keys are dropped once their last hit is older than the window. The number of live keys is
  *   capped; when the cap is reached with no expired key to drop, `hit` rejects with
  *   `unavailable` (callers fail closed, #50) rather than evicting a live key, which would let
@@ -27,6 +28,8 @@ import type {
 const NAME = 'memory-rate-limit' as const;
 const KEY_RE = /^[a-z0-9-]{1,32}:[0-9a-f]{32,128}$/;
 const MAX_WINDOW_SECONDS = 86_400;
+/** Upper bound for `RateLimitWindow.limit`. Memory per key is `limit + 1` timestamps. */
+export const MAX_LIMIT = 10_000;
 export const DEFAULT_MAX_KEYS = 10_000;
 
 export interface MemoryRateLimitOptions {
@@ -68,7 +71,9 @@ export function createMemoryRateLimitStore(
   function decide(key: RateLimitKey, window: RateLimitWindow): RateLimitResult {
     if (!KEY_RE.test(key)) throw misconfigured('invalid rate-limit key');
     const { limit, windowSeconds } = window;
-    if (!Number.isSafeInteger(limit) || limit < 1) throw misconfigured('invalid limit');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+      throw misconfigured('invalid limit');
+    }
     if (
       !Number.isSafeInteger(windowSeconds) ||
       windowSeconds < 1 ||
