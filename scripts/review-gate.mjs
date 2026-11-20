@@ -119,6 +119,28 @@ export async function prFilesAndLabels(repo, pr) {
   return { files, labels: issue.labels.map((l) => l.name), body: issue.body ?? '' };
 }
 
+/**
+ * The PR author and its commits, straight from the pulls API (never the body or labels).
+ * Used by touches-guard to recognise genuine Dependabot PRs.
+ */
+export async function prAuthorAndCommits(repo, pr) {
+  const pull = await gh(`repos/${repo}/pulls/${pr}`);
+  const commits = [];
+  for (let page = 1; ; page++) {
+    const batch = await gh(`repos/${repo}/pulls/${pr}/commits?per_page=100&page=${page}`);
+    commits.push(
+      ...batch.map((c) => ({
+        sha: c.sha,
+        author: c.author ? { login: c.author.login, type: c.author.type, id: c.author.id } : null,
+        verified: c.commit?.verification?.verified === true,
+      })),
+    );
+    if (batch.length < 100) break;
+  }
+  const u = pull.user ?? {};
+  return { user: { login: u.login, type: u.type, id: u.id }, commits };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repo = process.env.GITHUB_REPOSITORY;
   const pr = process.argv[2] ?? process.env.PR_NUMBER;
