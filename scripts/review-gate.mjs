@@ -108,15 +108,72 @@ async function gh(path) {
   return res.json();
 }
 
+/**
+ * Paths a PR changes, from the pulls/files API entries. A rename contributes both its new
+ * `filename` and its `previous_filename`, so a rename cannot hide the path it removes.
+ */
+export function changedPaths(apiFiles) {
+  const out = [];
+  for (const f of apiFiles) {
+    out.push(f.filename);
+    if (f.previous_filename && f.previous_filename !== f.filename) out.push(f.previous_filename);
+  }
+  return [...new Set(out)];
+}
+
+/** The pulls API never lists more than this many files / commits for one PR. */
+export const FILES_CAP = 3000;
+export const COMMITS_CAP = 250;
+
+/** Fail closed: a list at the API cap may be truncated, so nothing can be judged from it. */
+export function assertNotTruncated(kind, count, cap) {
+  if (count >= cap) {
+    throw new Error(
+      `✗ PR lists ${count} ${kind}, the GitHub API maximum (${cap}); the list may be truncated, ` +
+        'so the gates cannot check it. Split the PR into smaller PRs.',
+    );
+  }
+}
+
 export async function prFilesAndLabels(repo, pr) {
   const files = [];
+  let raw = 0;
   for (let page = 1; ; page++) {
     const batch = await gh(`repos/${repo}/pulls/${pr}/files?per_page=100&page=${page}`);
-    files.push(...batch.map((f) => f.filename));
+    raw += batch.length;
+    files.push(...changedPaths(batch));
     if (batch.length < 100) break;
   }
+  assertNotTruncated('files', raw, FILES_CAP);
   const issue = await gh(`repos/${repo}/issues/${pr}`);
   return { files, labels: issue.labels.map((l) => l.name), body: issue.body ?? '' };
+}
+
+/**
+ * The PR author and its commits, straight from the pulls API (never the body or labels).
+ * Used by touches-guard to recognise genuine Dependabot PRs.
+ */
+export async function prAuthorAndCommits(repo, pr) {
+  const pull = await gh(`repos/${repo}/pulls/${pr}`);
+  const commits = [];
+  for (let page = 1; ; page++) {
+    const batch = await gh(`repos/${repo}/pulls/${pr}/commits?per_page=100&page=${page}`);
+    commits.push(
+      ...batch.map((c) => ({
+        sha: c.sha,
+        author: c.author ? { login: c.author.login, type: c.author.type, id: c.author.id } : null,
+        committer: c.committer
+          ? { login: c.committer.login, type: c.committer.type, id: c.committer.id }
+          : null,
+        verified:
+          c.commit?.verification?.verified === true && c.commit?.verification?.reason === 'valid',
+      })),
+    );
+    if (batch.length < 100) break;
+  }
+  assertNotTruncated('commits', commits.length, COMMITS_CAP);
+  const u = pull.user ?? {};
+  return { user: { login: u.login, type: u.type, id: u.id }, commits };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -126,7 +183,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… review-gate <pr-number>');
     process.exit(2);
   }
-  const { files, labels } = await prFilesAndLabels(repo, pr);
+  let files, labels;
+  try {
+    ({ files, labels } = await prFilesAndLabels(repo, pr));
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
   const r = evaluate(files, labels);
   for (const [a, reasons] of r.required)
     console.log(`${labels.includes(a) ? '✓' : '✗'} ${a}\n    ${reasons.join('\n    ')}`);
