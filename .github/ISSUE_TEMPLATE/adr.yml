@@ -1,28 +1,28 @@
 name: ADR proposal
 description: A decision with lasting impact
-title: "adr: "
-labels: ["type:adr","status:needs-architect"]
+title: 'adr: '
+labels: ['type:adr', 'status:needs-architect']
 body:
   - type: markdown
     attributes:
-      value: "Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/."
+      value: 'Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/.'
   - type: input
     id: backlog-id
     attributes:
       label: Backlog ID
-      description: "Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues."
+      description: 'Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues.'
   - type: textarea
     id: context
     attributes:
       label: Context
-      description: 
+      description:
     validations:
       required: true
   - type: textarea
     id: options
     attributes:
       label: Options considered
-      description: 
+      description:
       value: |
         1. …
     validations:
@@ -31,13 +31,13 @@ body:
     id: decision
     attributes:
       label: Proposed decision
-      description: 
+      description:
     validations:
       required: true
   - type: textarea
     id: consequences
     attributes:
       label: Consequences
-      description: 
+      description:
     validations:
       required: true

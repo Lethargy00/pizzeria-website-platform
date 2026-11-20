@@ -13,7 +13,13 @@ export function* walk(root, base = root) {
     const full = join(root, name);
     const st = lstatSync(full);
     const rel = relative(base, full).split('\\').join('/');
-    yield { path: rel, full, isDir: st.isDirectory(), isSymlink: st.isSymbolicLink(), size: st.size };
+    yield {
+      path: rel,
+      full,
+      isDir: st.isDirectory(),
+      isSymlink: st.isSymbolicLink(),
+      size: st.size,
+    };
     if (st.isDirectory() && !st.isSymbolicLink()) yield* walk(full, base);
   }
 }

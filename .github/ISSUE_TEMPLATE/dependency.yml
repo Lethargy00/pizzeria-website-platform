@@ -1,16 +1,16 @@
 name: Dependency request
 description: Add or upgrade a platform dependency (Architect + Security must approve)
-title: "dep: "
-labels: ["type:dependency","review:architect","review:security"]
+title: 'dep: '
+labels: ['type:dependency', 'review:architect', 'review:security']
 body:
   - type: markdown
     attributes:
-      value: "Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/."
+      value: 'Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/.'
   - type: input
     id: backlog-id
     attributes:
       label: Backlog ID
-      description: "Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues."
+      description: 'Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues.'
   - type: textarea
     id: pkg
     attributes:
@@ -22,7 +22,7 @@ body:
     id: why
     attributes:
       label: Why it's needed
-      description: 
+      description:
     validations:
       required: true
   - type: textarea
@@ -43,7 +43,7 @@ body:
     id: maintenance
     attributes:
       label: Maintenance status
-      description: 
+      description:
     validations:
       required: true
   - type: textarea
@@ -57,6 +57,6 @@ body:
     id: vulns
     attributes:
       label: Known vulnerabilities
-      description: 
+      description:
     validations:
       required: true

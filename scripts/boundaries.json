@@ -2,44 +2,13 @@
   "$comment": "Allowed @pwp/* imports per package (ADR 0001). Owner: architect. tenants/ may import nothing.",
   "allow": {
     "schema": [],
-    "core": [
-      "schema"
-    ],
-    "tokens": [
-      "schema"
-    ],
-    "themes": [
-      "schema",
-      "tokens"
-    ],
-    "ui": [
-      "schema",
-      "tokens",
-      "core"
-    ],
-    "adapters": [
-      "schema",
-      "core"
-    ],
-    "functions": [
-      "schema",
-      "core",
-      "adapters"
-    ],
-    "cli": [
-      "schema",
-      "core",
-      "tokens",
-      "themes",
-      "ui",
-      "adapters",
-      "functions"
-    ],
-    "playground": [
-      "schema",
-      "tokens",
-      "themes",
-      "ui"
-    ]
+    "core": ["schema"],
+    "tokens": ["schema"],
+    "themes": ["schema", "tokens"],
+    "ui": ["schema", "tokens", "core"],
+    "adapters": ["schema", "core"],
+    "functions": ["schema", "core", "adapters"],
+    "cli": ["schema", "core", "tokens", "themes", "ui", "adapters", "functions"],
+    "playground": ["schema", "tokens", "themes", "ui"]
   }
 }

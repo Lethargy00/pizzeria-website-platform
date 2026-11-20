@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "UNLICENSED",
-  "description": "Renders every component \u00d7 variant \u00d7 theme for development and visual regression.",
+  "description": "Renders every component × variant × theme for development and visual regression.",
   "dependencies": {
     "@pwp/schema": "workspace:*",
     "@pwp/tokens": "workspace:*",

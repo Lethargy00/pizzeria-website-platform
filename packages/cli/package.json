@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "UNLICENSED",
-  "description": "The `pwp` compiler: validate \u2192 resolve theme \u2192 assemble pages \u2192 build \u2192 audit.",
+  "description": "The `pwp` compiler: validate → resolve theme → assemble pages → build → audit.",
   "exports": {
     ".": "./src/index.ts"
   },

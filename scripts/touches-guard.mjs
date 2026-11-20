@@ -24,7 +24,10 @@ export function outside(files, globs) {
 
 async function issueBody(repo, n) {
   const res = await fetch(`https://api.github.com/repos/${repo}/issues/${n}`, {
-    headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json' },
+    headers: {
+      authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+      accept: 'application/vnd.github+json',
+    },
   });
   if (!res.ok) throw new Error(`issue #${n}: ${res.status}`);
   return (await res.json()).body ?? '';
@@ -33,12 +36,23 @@ async function issueBody(repo, n) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repo = process.env.GITHUB_REPOSITORY;
   const pr = process.argv[2] ?? process.env.PR_NUMBER;
-  if (!repo || !pr) { console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… touches-guard <pr-number>'); process.exit(2); }
+  if (!repo || !pr) {
+    console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… touches-guard <pr-number>');
+    process.exit(2);
+  }
   const { files, body } = await prFilesAndLabels(repo, pr);
   const n = closedIssue(body);
-  if (!n) { console.error('✗ PR body has no "Closes #<issue>". Every PR must close an issue (PROMPT.md §12.1).'); process.exit(1); }
+  if (!n) {
+    console.error(
+      '✗ PR body has no "Closes #<issue>". Every PR must close an issue (PROMPT.md §12.1).',
+    );
+    process.exit(1);
+  }
   const globs = parseTouches(await issueBody(repo, n));
-  if (!globs.length) { console.error(`✗ Issue #${n} has no Touches globs (backticked paths under "## Touches").`); process.exit(1); }
+  if (!globs.length) {
+    console.error(`✗ Issue #${n} has no Touches globs (backticked paths under "## Touches").`);
+    process.exit(1);
+  }
   const bad = outside(files, globs);
   if (bad.length) {
     console.error(`✗ ${bad.length} file(s) outside the Touches of #${n} (${globs.join(', ')}):`);

@@ -1,16 +1,16 @@
 name: Security finding
 description: Filed by security (or anyone) for a vulnerability or control gap
-title: "sec: "
-labels: ["type:security-finding","security:sensitive"]
+title: 'sec: '
+labels: ['type:security-finding', 'security:sensitive']
 body:
   - type: markdown
     attributes:
-      value: "Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/."
+      value: 'Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/.'
   - type: input
     id: backlog-id
     attributes:
       label: Backlog ID
-      description: "Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues."
+      description: 'Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues.'
   - type: dropdown
     id: severity
     attributes:
@@ -22,34 +22,34 @@ body:
     id: ref
     attributes:
       label: OWASP / CWE reference
-      description: 
+      description:
     validations:
       required: true
   - type: textarea
     id: paths
     attributes:
       label: Affected paths
-      description: 
+      description:
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
       label: Reproduction
-      description: 
+      description:
     validations:
       required: true
   - type: textarea
     id: fix
     attributes:
       label: Recommended fix
-      description: 
+      description:
     validations:
       required: true
   - type: textarea
     id: before
     attributes:
       label: Must be fixed before (milestone)
-      description: 
+      description:
     validations:
       required: true

@@ -17,7 +17,14 @@ export function globToRegExp(glob) {
     else if (c === '{') {
       const end = g.indexOf('}', i);
       if (end === -1) throw new Error(`Unclosed { in glob: ${glob}`);
-      re += '(?:' + g.slice(i + 1, end).split(',').map(escape).join('|') + ')';
+      re +=
+        '(?:' +
+        g
+          .slice(i + 1, end)
+          .split(',')
+          .map(escape)
+          .join('|') +
+        ')';
       i = end;
     } else re += escape(c);
   }

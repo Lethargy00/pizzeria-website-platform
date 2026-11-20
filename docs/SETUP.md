@@ -18,17 +18,17 @@ pnpm test:e2e     # Playwright (no suites yet); first run: pnpm exec playwright 
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `pnpm build` | Builds all packages (Turborepo) |
-| `pnpm lint` / `pnpm format` / `pnpm format:check` | ESLint / Prettier |
-| `pnpm typecheck` | `tsc` for the root config and every package |
-| `pnpm test` | Vitest unit tests (`packages/*/src/**/*.test.ts`) |
-| `pnpm test:scripts` | `node:test` suites for the guard scripts |
-| `pnpm tenant-guard` | Fails if anything under `tenants/` isn't plain data |
-| `pnpm check-boundaries` | Enforces package dependency rules (ADR 0001) |
-| `GITHUB_REPOSITORY=… GITHUB_TOKEN=… pnpm review-gate <pr>` | Review matrix check for a PR |
-| `GITHUB_REPOSITORY=… GITHUB_TOKEN=… pnpm touches-guard <pr>` | Checks a PR stays inside its issue's Touches |
+| Command                                                      | What it does                                        |
+| ------------------------------------------------------------ | --------------------------------------------------- |
+| `pnpm build`                                                 | Builds all packages (Turborepo)                     |
+| `pnpm lint` / `pnpm format` / `pnpm format:check`            | ESLint / Prettier                                   |
+| `pnpm typecheck`                                             | `tsc` for the root config and every package         |
+| `pnpm test`                                                  | Vitest unit tests (`packages/*/src/**/*.test.ts`)   |
+| `pnpm test:scripts`                                          | `node:test` suites for the guard scripts            |
+| `pnpm tenant-guard`                                          | Fails if anything under `tenants/` isn't plain data |
+| `pnpm check-boundaries`                                      | Enforces package dependency rules (ADR 0001)        |
+| `GITHUB_REPOSITORY=… GITHUB_TOKEN=… pnpm review-gate <pr>`   | Review matrix check for a PR                        |
+| `GITHUB_REPOSITORY=… GITHUB_TOKEN=… pnpm touches-guard <pr>` | Checks a PR stays inside its issue's Touches        |
 
 The `pwp` CLI (`new`, `validate`, `dev`, `build`, `audit`, `preview-themes`) arrives in M5.
 

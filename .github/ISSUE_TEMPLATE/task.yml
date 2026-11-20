@@ -1,16 +1,16 @@
 name: Task / feature / component
 description: One unit of work = one PR (≤ ~400 changed lines)
-title: "<type>: "
-labels: ["type:feature"]
+title: '<type>: '
+labels: ['type:feature']
 body:
   - type: markdown
     attributes:
-      value: "Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/."
+      value: 'Start every issue body and comment with your signature: **[agent: <agent-id> · role: <role>]**. Keep the hidden backlog-id line if the issue comes from .github/backlog/.'
   - type: input
     id: backlog-id
     attributes:
       label: Backlog ID
-      description: "Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues."
+      description: 'Stable key, written into the body as <!-- backlog-id: <key> -->. Leave empty for ad-hoc issues.'
   - type: textarea
     id: context
     attributes:
@@ -75,7 +75,7 @@ body:
     id: dod
     attributes:
       label: Definition of done
-      description: 
+      description:
       value: |
         - [ ] Acceptance criteria verified by someone other than the author
         - [ ] CI green, review matrix satisfied

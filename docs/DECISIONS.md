@@ -35,7 +35,7 @@ Recorded by `orchestrator` on 2026-11-20.
 
 ## Customization and theming
 
-21. **Q4.1 Starter themes:** 3: *Classic Trattoria*, *Modern Minimal*, *Street/Bold*. — `default`
+21. **Q4.1 Starter themes:** 3: _Classic Trattoria_, _Modern Minimal_, _Street/Bold_. — `default`
 22. **Q4.2 Customizable:** all listed items, through validated config only. — `default`
 23. **Q4.3 Fonts:** self-hosted only; curated open-licensed fonts per theme; tenants may upload their own licensed WOFF2. — `default`
 24. **Q4.4 Variants:** yes, 2–4 per major section. — `default`
@@ -51,15 +51,15 @@ Recorded by `orchestrator` on 2026-11-20.
 31. **Q5.3 Locations/maps:** in v1; static map image or click-to-load map, nothing third-party before consent. — `default`
 32. **Q5.4 Online ordering:** **not in v1.** No cart, checkout or order handling. v1 supports "order via external link" (a delivery platform or the pizzeria's own system) and click-to-call per location. The full ordering module moves to the `Later` milestone. — `user` ("forget about payments"; moving ordering to Later is the Orchestrator's reading, since it depends on payments)
 33. **Q5.5 Payments:** **out of scope.** No payment providers or adapters, no Stripe, Swish or Klarna, no webhooks. — `user`
-34. **Q5.6 Delivery zones:** *later*, with the ordering module. v1 may show delivery areas as plain text per location. — `user` (follows from 32)
-35. **Q5.7 Reservations:** request form (email) or external booking link in v1; full reservations *later*. — `default`
-36. **Q5.8 CMS:** *later*; content interface defined now. — `default`
+34. **Q5.6 Delivery zones:** _later_, with the ordering module. v1 may show delivery areas as plain text per location. — `user` (follows from 32)
+35. **Q5.7 Reservations:** request form (email) or external booking link in v1; full reservations _later_. — `default`
+36. **Q5.8 CMS:** _later_; content interface defined now. — `default`
 37. **Q5.9 Contact / catering forms:** in v1, with spam protection and rate limiting. — `default`
-38. **Q5.10 Newsletter:** *later*, adapter only. — `default`
+38. **Q5.10 Newsletter:** _later_, adapter only. — `default`
 39. **Q5.11 Gallery / about / reviews:** gallery and about in v1; reviews only as verifiable links/embeds to real review platforms. — `default`
-40. **Q5.12 Gift cards, loyalty, coupons:** *later*. — `default`
+40. **Q5.12 Gift cards, loyalty, coupons:** _later_. — `default`
 41. **Q5.13 Print menu + QR:** in v1. — `default`
-42. **Q5.14 Notifications:** email + generic webhook in v1; SMS and POS *later*. — `default`
+42. **Q5.14 Notifications:** email + generic webhook in v1; SMS and POS _later_. — `default`
 
 ## Content, SEO, performance
 
@@ -112,7 +112,7 @@ Recorded by `orchestrator` on 2026-11-20.
 ## Environment notes (facts about where the agents run, not choices)
 
 76. **No GraphQL from agent sessions.** `gh` commands that use GraphQL (`gh issue list`, `gh pr list`, `gh pr create`, `gh issue edit`, Projects) fail. Agents use the REST equivalents via `gh api repos/Lethargy00/pizzeria-website-platform/...`. The `gh` commands in `AGENTS.md` describe intent; the REST mapping is in `docs/agents/gh-rest.md`. This is a deliberate block in the network layer of the cloud agent sessions, not a token or scope problem, so it can't be fixed from inside a session. Agents running in Claude Code on the human's own machine (with their own `gh auth login`) don't have this limit; there, the porcelain `gh` commands and a Projects board work.
-77. **No branch protection.** GitHub refuses branch protection and rulesets on this private repo on the current (free) plan. Until the repo is upgraded or made public, `review-gate`, `tenant-guard` and `touches-guard` cannot be *required* checks; the Orchestrator must check them before every merge. Listed in `docs/HANDOFF.md`.
+77. **No branch protection.** GitHub refuses branch protection and rulesets on this private repo on the current (free) plan. Until the repo is upgraded or made public, `review-gate`, `tenant-guard` and `touches-guard` cannot be _required_ checks; the Orchestrator must check them before every merge. Listed in `docs/HANDOFF.md`.
 78. **No GitHub Actions API.** Workflow runs can't be read through `gh run` from agent sessions. The Orchestrator reads CI results through `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` and `/status` (verified reachable on 2026-11-20).
 79. **No package installs in agent sessions.** The agents' shell can't reach the npm registry, so `pnpm install` and lockfile generation can't run locally. `pnpm-lock.yaml` must be generated in CI (or by the human) on the first `platform` PR. Tracked as a `status:blocked` risk on the M1 epic.
 80. **Sessions are not long-running.** Each agent session ends when it replies. The Orchestrator's wait-with-backoff loop (Appendix B.1) therefore runs as one loop per session, resumed by the human or by a scheduled task.

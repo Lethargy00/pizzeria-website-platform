@@ -7,17 +7,74 @@ import { matchesAny } from './lib/glob.mjs';
 
 export const MATRIX = [
   { id: 'peer', approval: 'approved:peer', when: () => true, why: 'every PR needs a peer review' },
-  { id: 'architect', approval: 'approved:architect', why: 'contract, public API or package boundary change',
-    when: (f) => matchesAny(f, ['packages/schema/**', 'packages/*/src/contracts/**', 'packages/adapters/src/interfaces/**', 'scripts/boundaries.json', 'docs/adr/**', 'packages/*/package.json']) },
-  { id: 'dependency', approval: ['approved:architect', 'approved:security'], why: 'dependency change (also link an approved type:dependency issue)',
-    when: (f) => matchesAny(f, ['pnpm-lock.yaml', 'package.json', 'packages/*/package.json', 'playground/package.json', 'pnpm-workspace.yaml', '.npmrc']) },
-  { id: 'security', approval: 'approved:security', why: 'security-sensitive path',
-    when: (f, labels) => labels.includes('security:sensitive') || matchesAny(f, [
-      'packages/functions/**', 'packages/adapters/**', 'packages/ui/src/components/*Form*/**', 'packages/**/sanitize*/**', 'packages/**/*sanitiz*',
-      'packages/**/csp/**', 'packages/**/*csp*', 'packages/**/headers/**', 'packages/cli/src/build/**', 'packages/cli/src/isolation/**',
-      '.github/workflows/**', 'scripts/tenant-guard.mjs', 'scripts/review-gate.mjs', 'scripts/touches-guard.mjs', '**/.env.example', 'SECURITY.md', 'docs/SECURITY.md', 'docs/THREAT-MODEL.md', '.github/CODEOWNERS']) },
-  { id: 'a11y-perf', approval: 'approved:a11y-perf', why: 'user-visible change',
-    when: (f) => matchesAny(f, ['packages/ui/**', 'packages/themes/**', 'packages/tokens/**', 'playground/**']) },
+  {
+    id: 'architect',
+    approval: 'approved:architect',
+    why: 'contract, public API or package boundary change',
+    when: (f) =>
+      matchesAny(f, [
+        'packages/schema/**',
+        'packages/*/src/contracts/**',
+        'packages/adapters/src/interfaces/**',
+        'scripts/boundaries.json',
+        'docs/adr/**',
+        'packages/*/package.json',
+      ]),
+  },
+  {
+    id: 'dependency',
+    approval: ['approved:architect', 'approved:security'],
+    why: 'dependency change (also link an approved type:dependency issue)',
+    when: (f) =>
+      matchesAny(f, [
+        'pnpm-lock.yaml',
+        'package.json',
+        'packages/*/package.json',
+        'playground/package.json',
+        'pnpm-workspace.yaml',
+        '.npmrc',
+      ]),
+  },
+  {
+    id: 'security',
+    approval: 'approved:security',
+    why: 'security-sensitive path',
+    when: (f, labels) =>
+      labels.includes('security:sensitive') ||
+      matchesAny(f, [
+        'packages/functions/**',
+        'packages/adapters/**',
+        'packages/ui/src/components/*Form*/**',
+        'packages/**/sanitize*/**',
+        'packages/**/*sanitiz*',
+        'packages/**/csp/**',
+        'packages/**/*csp*',
+        'packages/**/headers/**',
+        'packages/cli/src/build/**',
+        'packages/cli/src/isolation/**',
+        '.github/workflows/**',
+        'scripts/tenant-guard.mjs',
+        'scripts/review-gate.mjs',
+        'scripts/touches-guard.mjs',
+        '**/.env.example',
+        'SECURITY.md',
+        'docs/SECURITY.md',
+        'docs/THREAT-MODEL.md',
+        '.github/CODEOWNERS',
+      ]),
+  },
+  {
+    id: 'a11y-perf',
+    approval: 'approved:a11y-perf',
+    why: 'user-visible change',
+    when: (f) =>
+      matchesAny(f, [
+        'packages/ui/**',
+        'packages/themes/**',
+        'packages/tokens/**',
+        'playground/**',
+      ]),
+  },
 ];
 
 /** @returns {{ required: Map<string,string[]>, missing: {label:string, reasons:string[]}[], blocking: boolean }} */
@@ -25,7 +82,8 @@ export function evaluate(files, labels) {
   const required = new Map();
   for (const row of MATRIX) {
     const hits = row.id === 'peer' ? ['(any)'] : files.filter((f) => row.when(f, labels));
-    if (row.id === 'security' && labels.includes('security:sensitive') && !hits.length) hits.push('(label security:sensitive)');
+    if (row.id === 'security' && labels.includes('security:sensitive') && !hits.length)
+      hits.push('(label security:sensitive)');
     if (!hits.length) continue;
     for (const a of [row.approval].flat()) {
       const reasons = required.get(a) ?? [];
@@ -33,13 +91,18 @@ export function evaluate(files, labels) {
       required.set(a, reasons);
     }
   }
-  const missing = [...required].filter(([a]) => !labels.includes(a)).map(([label, reasons]) => ({ label, reasons }));
+  const missing = [...required]
+    .filter(([a]) => !labels.includes(a))
+    .map(([label, reasons]) => ({ label, reasons }));
   return { required, missing, blocking: labels.includes('security:blocking') };
 }
 
 async function gh(path) {
   const res = await fetch(`https://api.github.com/${path}`, {
-    headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json' },
+    headers: {
+      authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+      accept: 'application/vnd.github+json',
+    },
   });
   if (!res.ok) throw new Error(`GitHub API ${path}: ${res.status}`);
   return res.json();
@@ -59,11 +122,16 @@ export async function prFilesAndLabels(repo, pr) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repo = process.env.GITHUB_REPOSITORY;
   const pr = process.argv[2] ?? process.env.PR_NUMBER;
-  if (!repo || !pr) { console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… review-gate <pr-number>'); process.exit(2); }
+  if (!repo || !pr) {
+    console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… review-gate <pr-number>');
+    process.exit(2);
+  }
   const { files, labels } = await prFilesAndLabels(repo, pr);
   const r = evaluate(files, labels);
-  for (const [a, reasons] of r.required) console.log(`${labels.includes(a) ? '✓' : '✗'} ${a}\n    ${reasons.join('\n    ')}`);
-  if (r.blocking) console.error('\n✗ security:blocking is set. Only the Security Reviewer can lift it.');
+  for (const [a, reasons] of r.required)
+    console.log(`${labels.includes(a) ? '✓' : '✗'} ${a}\n    ${reasons.join('\n    ')}`);
+  if (r.blocking)
+    console.error('\n✗ security:blocking is set. Only the Security Reviewer can lift it.');
   if (r.missing.length || r.blocking) process.exit(1);
   console.log('\nreview-gate: OK');
 }

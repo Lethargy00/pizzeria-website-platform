@@ -11,12 +11,27 @@ import { closedIssue, parseTouches, outside } from '../touches-guard.mjs';
 import { isAllowed, check } from '../check-licenses.mjs';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'pwp-'));
-const put = (root, rel, text = '') => { mkdirSync(join(root, rel, '..'), { recursive: true }); writeFileSync(join(root, rel), text); };
+const put = (root, rel, text = '') => {
+  mkdirSync(join(root, rel, '..'), { recursive: true });
+  writeFileSync(join(root, rel), text);
+};
 
 test('glob matching', () => {
-  assert.ok(globToRegExp('packages/ui/src/components/Hero/**').test('packages/ui/src/components/Hero/variants/split.astro'));
-  assert.ok(globToRegExp('packages/ui/src/components/Hero/**').test('packages/ui/src/components/Hero/Hero.astro'));
-  assert.ok(!globToRegExp('packages/ui/src/components/Hero/**').test('packages/ui/src/components/HeroX/a.ts'));
+  assert.ok(
+    globToRegExp('packages/ui/src/components/Hero/**').test(
+      'packages/ui/src/components/Hero/variants/split.astro',
+    ),
+  );
+  assert.ok(
+    globToRegExp('packages/ui/src/components/Hero/**').test(
+      'packages/ui/src/components/Hero/Hero.astro',
+    ),
+  );
+  assert.ok(
+    !globToRegExp('packages/ui/src/components/Hero/**').test(
+      'packages/ui/src/components/HeroX/a.ts',
+    ),
+  );
   assert.ok(globToRegExp('packages/*/package.json').test('packages/ui/package.json'));
   assert.ok(!globToRegExp('packages/*/package.json').test('packages/ui/sub/package.json'));
   assert.ok(globToRegExp('**/.env.example').test('.env.example'));
@@ -27,8 +42,16 @@ test('glob matching', () => {
 
 test('tenant-guard: clean tenant passes', () => {
   const r = tmp();
-  put(r, 'demo/site.config.yaml', 'theme: modern-minimal\nlinks:\n  order: https://example.com/order\n  phone: tel:+46812345678\n');
-  put(r, 'demo/content/pages/about.md', '# Om oss\n\nVi bakar sedan 1998. [Mejla oss](mailto:hej@example.com)\n');
+  put(
+    r,
+    'demo/site.config.yaml',
+    'theme: modern-minimal\nlinks:\n  order: https://example.com/order\n  phone: tel:+46812345678\n',
+  );
+  put(
+    r,
+    'demo/content/pages/about.md',
+    '# Om oss\n\nVi bakar sedan 1998. [Mejla oss](mailto:hej@example.com)\n',
+  );
   put(r, 'demo/assets/logo.webp', 'x');
   put(r, 'demo/assets/fonts/brand.woff2', 'x');
   assert.deepEqual(checkTenants(r), []);
@@ -36,14 +59,22 @@ test('tenant-guard: clean tenant passes', () => {
 
 test('tenant-guard: forbidden files, types, symlinks', () => {
   const r = tmp();
-  for (const f of ['package.json', 'pnpm-lock.yaml', '.npmrc', 'yarn.lock', 'importmap.json']) put(r, `a/${f}`, '{}');
+  for (const f of ['package.json', 'pnpm-lock.yaml', '.npmrc', 'yarn.lock', 'importmap.json'])
+    put(r, `a/${f}`, '{}');
   mkdirSync(join(r, 'a/node_modules'), { recursive: true });
   put(r, 'a/custom.js', 'alert(1)');
   put(r, 'a/assets/logo.svg', '<svg/>');
   put(r, 'a/assets/font.ttf', 'x');
   symlinkSync('../../b', join(r, 'a/peek'));
   const rules = checkTenants(r).map((p) => `${p.rule} ${p.path}`);
-  for (const f of ['package.json', 'pnpm-lock.yaml', '.npmrc', 'yarn.lock', 'importmap.json', 'node_modules'])
+  for (const f of [
+    'package.json',
+    'pnpm-lock.yaml',
+    '.npmrc',
+    'yarn.lock',
+    'importmap.json',
+    'node_modules',
+  ])
     assert.ok(rules.includes(`forbidden-file tenants/a/${f}`), f);
   assert.ok(rules.includes('file-type tenants/a/custom.js'));
   assert.ok(rules.includes('file-type tenants/a/assets/logo.svg'));
@@ -66,7 +97,10 @@ test('tenant-guard: dangerous content in YAML/Markdown', () => {
     const r = tmp();
     put(r, 't/content/x.md', `ok line\n${text}\n`);
     const p = checkTenants(r);
-    assert.ok(p.some((x) => x.rule === rule && x.path === 'tenants/t/content/x.md:2'), `${rule}: ${JSON.stringify(p)}`);
+    assert.ok(
+      p.some((x) => x.rule === rule && x.path === 'tenants/t/content/x.md:2'),
+      `${rule}: ${JSON.stringify(p)}`,
+    );
   }
 });
 
@@ -74,28 +108,53 @@ test('check-boundaries', () => {
   const r = tmp();
   const rules = { allow: { schema: [], ui: ['schema'], core: ['schema'] } };
   put(r, 'packages/schema/src/index.ts', "import { z } from 'zod';\nexport const a = 1;\n");
-  put(r, 'packages/ui/src/ok.ts', "import type { A } from '@pwp/schema/menu';\nimport { b } from './b.js';\n");
+  put(
+    r,
+    'packages/ui/src/ok.ts',
+    "import type { A } from '@pwp/schema/menu';\nimport { b } from './b.js';\n",
+  );
   put(r, 'packages/ui/src/b.ts', 'export const b = 1;');
   assert.deepEqual(checkBoundaries(r, rules), []);
-  put(r, 'packages/ui/src/bad.ts', "import { x } from '@pwp/core';\nconst y = await import('../../core/src/index.js');\nimport m from '../../../tenants/demo/menu.yaml';\n");
+  put(
+    r,
+    'packages/ui/src/bad.ts',
+    "import { x } from '@pwp/core';\nconst y = await import('../../core/src/index.js');\nimport m from '../../../tenants/demo/menu.yaml';\n",
+  );
   const p = checkBoundaries(r, rules).map((x) => x.at + ' ' + x.message);
   assert.equal(p.length, 4, p.join('\n'));
   assert.ok(p[0].startsWith('packages/ui/src/bad.ts:1 @pwp/ui may not import @pwp/core'));
-  assert.deepEqual(findImports("export { a } from './a.js'").map((i) => i.spec), ['./a.js']);
+  assert.deepEqual(
+    findImports("export { a } from './a.js'").map((i) => i.spec),
+    ['./a.js'],
+  );
 });
 
 test('review-gate matrix', () => {
-  assert.deepEqual(evaluate(['docs/guides/x.md'], []).missing.map((m) => m.label), ['approved:peer']);
+  assert.deepEqual(
+    evaluate(['docs/guides/x.md'], []).missing.map((m) => m.label),
+    ['approved:peer'],
+  );
   assert.deepEqual(evaluate(['docs/guides/x.md'], ['approved:peer']).missing, []);
   const ui = evaluate(['packages/ui/src/components/Hero/Hero.astro'], ['approved:peer']);
-  assert.deepEqual(ui.missing.map((m) => m.label), ['approved:a11y-perf']);
-  const dep = evaluate(['pnpm-lock.yaml'], ['approved:peer']).missing.map((m) => m.label).sort();
+  assert.deepEqual(
+    ui.missing.map((m) => m.label),
+    ['approved:a11y-perf'],
+  );
+  const dep = evaluate(['pnpm-lock.yaml'], ['approved:peer'])
+    .missing.map((m) => m.label)
+    .sort();
   assert.deepEqual(dep, ['approved:architect', 'approved:security']);
   const wf = evaluate(['.github/workflows/ci.yml'], ['approved:peer']).missing.map((m) => m.label);
   assert.deepEqual(wf, ['approved:security']);
-  const fn = evaluate(['packages/functions/src/contact/handler.ts'], ['approved:peer', 'approved:security']);
+  const fn = evaluate(
+    ['packages/functions/src/contact/handler.ts'],
+    ['approved:peer', 'approved:security'],
+  );
   assert.deepEqual(fn.missing, []);
-  assert.deepEqual(evaluate(['README.md'], ['approved:peer', 'security:sensitive']).missing.map((m) => m.label), ['approved:security']);
+  assert.deepEqual(
+    evaluate(['README.md'], ['approved:peer', 'security:sensitive']).missing.map((m) => m.label),
+    ['approved:security'],
+  );
   assert.equal(evaluate(['README.md'], ['approved:peer', 'security:blocking']).blocking, true);
 });
 
@@ -103,12 +162,16 @@ test('touches-guard parsing', () => {
   assert.equal(closedIssue('**[agent: ui-1]**\n\nCloses #42\n'), 42);
   assert.equal(closedIssue('fixes #7'), 7);
   assert.equal(closedIssue('relates to #7'), null);
-  const md = '## Scope\nIn: x\n## Touches\n`packages/ui/src/components/Hero/**`, `docs/guides/hero.md`\n## Contracts\n`packages/schema/**`\n';
+  const md =
+    '## Scope\nIn: x\n## Touches\n`packages/ui/src/components/Hero/**`, `docs/guides/hero.md`\n## Contracts\n`packages/schema/**`\n';
   assert.deepEqual(parseTouches(md), ['packages/ui/src/components/Hero/**', 'docs/guides/hero.md']);
-  const form = '### Scope\n\nIn\n\n### Touches\n\n`packages/core/**`\n\n### Contracts\n\n_No response_';
+  const form =
+    '### Scope\n\nIn\n\n### Touches\n\n`packages/core/**`\n\n### Contracts\n\n_No response_';
   assert.deepEqual(parseTouches(form), ['packages/core/**']);
   assert.deepEqual(parseTouches('## Touches\n`a/**`'), ['a/**']);
-  assert.deepEqual(outside(['packages/core/src/a.ts', 'pnpm-lock.yaml'], ['packages/core/**']), ['pnpm-lock.yaml']);
+  assert.deepEqual(outside(['packages/core/src/a.ts', 'pnpm-lock.yaml'], ['packages/core/**']), [
+    'pnpm-lock.yaml',
+  ]);
 });
 
 test('license allow-list', () => {
@@ -116,5 +179,11 @@ test('license allow-list', () => {
   assert.ok(isAllowed('(MIT OR GPL-3.0)'));
   assert.ok(!isAllowed('MIT AND GPL-3.0'));
   assert.ok(!isAllowed('AGPL-3.0'));
-  assert.deepEqual(check({ MIT: [{ name: 'a', versions: ['1.0.0'] }], 'GPL-3.0': [{ name: 'b', versions: ['2.0.0'] }] }), ['b@2.0.0: GPL-3.0']);
+  assert.deepEqual(
+    check({
+      MIT: [{ name: 'a', versions: ['1.0.0'] }],
+      'GPL-3.0': [{ name: 'b', versions: ['2.0.0'] }],
+    }),
+    ['b@2.0.0: GPL-3.0'],
+  );
 });

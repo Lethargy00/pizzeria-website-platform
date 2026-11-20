@@ -3,6 +3,7 @@
 Updated by `orchestrator` every loop.
 
 ## 2026-11-20
+
 - Phase 0 (intake) done: `docs/DECISIONS.md`. Scope cut: no payments, no VAT, online ordering moved to Later.
 - Phase 1 setup done: `AGENTS.md`, role files, issue/PR templates, 81 labels, milestones M1–M9 + Later.
 - **M1 Foundation built** (committed directly to `main` at the human's request, DECISIONS #81):

@@ -24,17 +24,17 @@ Option 1.
 
 All packages are private workspace packages named `@pwp/<name>` (no registry publishing, Q2.3). Source is consumed directly (`exports` → `./src/index.ts`); no per-package build step until a package needs one.
 
-| Package | Responsibility | May import (`@pwp/*`) |
-|---|---|---|
-| `schema` | Zod schemas for every tenant-facing shape: site config, theme tokens, menu, hours, locations, pages, section types/variants/props. **The contracts.** | none |
-| `core` | Pure TypeScript: opening hours and "open now" in `Europe/Stockholm` (DST, holidays, overnight hours), allergen mapping, i18n helpers, slugs, price formatting (SEK display only). No I/O, no framework. | `schema` |
-| `tokens` | Token schema → CSS custom properties (light/dark), WCAG 2.2 AA contrast gate. | `schema` |
-| `themes` | Three starter themes: token sets, self-hosted WOFF2 fonts with licenses, image treatments. One folder per theme. | `schema`, `tokens` |
-| `ui` | Astro components and islands. One folder per component, auto-discovered. | `schema`, `tokens`, `core` |
-| `adapters` | Interfaces (`src/interfaces/`, owned by architect) and implementations (`src/<adapter>/`): email, webhook, analytics, maps, storage, CMS. Mock adapter first, always the default in dev/test. | `schema`, `core` |
-| `functions` | Serverless handlers (contact, catering, reservation request). Validated with the shared schemas, size-limited, rate-limited, CSRF-protected. | `schema`, `core`, `adapters` |
-| `cli` | The `pwp` compiler: `new`, `validate`, `dev`, `build`, `audit`, `preview-themes`. Commands auto-discovered from `src/commands/<name>/`. Enforces build isolation. | all of the above |
-| `playground` | Renders component × variant × theme for development and visual regression. | `schema`, `tokens`, `themes`, `ui` |
+| Package      | Responsibility                                                                                                                                                                                          | May import (`@pwp/*`)              |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `schema`     | Zod schemas for every tenant-facing shape: site config, theme tokens, menu, hours, locations, pages, section types/variants/props. **The contracts.**                                                   | none                               |
+| `core`       | Pure TypeScript: opening hours and "open now" in `Europe/Stockholm` (DST, holidays, overnight hours), allergen mapping, i18n helpers, slugs, price formatting (SEK display only). No I/O, no framework. | `schema`                           |
+| `tokens`     | Token schema → CSS custom properties (light/dark), WCAG 2.2 AA contrast gate.                                                                                                                           | `schema`                           |
+| `themes`     | Three starter themes: token sets, self-hosted WOFF2 fonts with licenses, image treatments. One folder per theme.                                                                                        | `schema`, `tokens`                 |
+| `ui`         | Astro components and islands. One folder per component, auto-discovered.                                                                                                                                | `schema`, `tokens`, `core`         |
+| `adapters`   | Interfaces (`src/interfaces/`, owned by architect) and implementations (`src/<adapter>/`): email, webhook, analytics, maps, storage, CMS. Mock adapter first, always the default in dev/test.           | `schema`, `core`                   |
+| `functions`  | Serverless handlers (contact, catering, reservation request). Validated with the shared schemas, size-limited, rate-limited, CSRF-protected.                                                            | `schema`, `core`, `adapters`       |
+| `cli`        | The `pwp` compiler: `new`, `validate`, `dev`, `build`, `audit`, `preview-themes`. Commands auto-discovered from `src/commands/<name>/`. Enforces build isolation.                                       | all of the above                   |
+| `playground` | Renders component × variant × theme for development and visual regression.                                                                                                                              | `schema`, `tokens`, `themes`, `ui` |
 
 `ui` may never import `functions` or `adapters`; client code never sees server code. The machine-readable form of this table is `scripts/boundaries.json`, checked by `pnpm check-boundaries` in CI. It also rejects relative imports that leave a package, and any import of `tenants/` from code.
 
@@ -53,6 +53,7 @@ Each schema that a component consumes lives next to the section-type definition 
 ### Build and isolation
 
 `pwp build <slug>` builds one tenant into `dist/<slug>/` in its own process with:
+
 - read access only to `tenants/<slug>/` and `packages/`; any attempt to resolve another tenant path fails the build (tested);
 - only that tenant's environment variables (`PWP_<SLUG>_*` mapped to unprefixed names);
 - per-tenant security headers and a strict CSP generated from the enabled adapters (no `unsafe-inline`, no `unsafe-eval`; hashes for any inline script).
