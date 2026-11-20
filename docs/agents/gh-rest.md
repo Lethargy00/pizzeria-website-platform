@@ -1,6 +1,6 @@
 # `gh` REST equivalents for agent sessions
 
-Agent sessions can't use GitHub's GraphQL API (see `docs/DECISIONS.md` #76). Most porcelain commands in `AGENTS.md` (`gh issue list`, `gh pr create`, `gh issue edit`, `gh pr view --json`) use GraphQL and fail with HTTP 403. Use the REST calls below. They mean the same as the commands in `AGENTS.md`; only the spelling differs.
+Agent sessions can't use GitHub's GraphQL API (see `docs/DECISIONS.md` #76). Node version and npm notes for agent sessions are in `docs/agents/environment.md`. Most porcelain commands in `AGENTS.md` (`gh issue list`, `gh pr create`, `gh issue edit`, `gh pr view --json`) use GraphQL and fail with HTTP 403. Use the REST calls below. They mean the same as the commands in `AGENTS.md`; only the spelling differs.
 
 ```bash
 R=repos/Lethargy00/pizzeria-website-platform
