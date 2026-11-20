@@ -5,6 +5,9 @@
   "type": "module",
   "license": "UNLICENSED",
   "description": "Zod schemas: tenant config, theme tokens, menu, hours, locations, pages. The source of every contract.",
+  "dependencies": {
+    "zod": "4.6.7"
+  },
   "exports": {
     ".": "./src/index.ts"
   }
