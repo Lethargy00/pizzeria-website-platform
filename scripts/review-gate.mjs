@@ -5,6 +5,22 @@
 import { pathToFileURL } from 'node:url';
 import { matchesAny } from './lib/glob.mjs';
 
+/**
+ * ADR 0002 Enforcement (c), #81: the rich-text chokepoint and the checks that guard it.
+ * Every change here needs approved:security, whatever other rows say (#93 may narrow the
+ * dependency row; this row keeps packages/core/package.json, which holds the ./richtext
+ * export, under security review on its own). Mirrored in .github/CODEOWNERS.
+ */
+export const RICHTEXT_PATHS = [
+  'packages/core/src/richtext/**', // renderMarkdown, the SafeHtml constructor, the sanitize schema
+  'packages/core/package.json', // the "./richtext" subpath export
+  'scripts/boundaries.json', // ADR 0002 (a): the import rule (#79)
+  'scripts/check-boundaries.mjs', // ADR 0002 (a): the check that enforces it (#79)
+  'scripts/check-html-sinks.mjs', // ADR 0002 (b), (d): HTML sinks take only SafeHtml (#80)
+  'scripts/test/richtext-*', // the fixtures that prove (a) works
+  'scripts/test/*html-sink*', // the fixtures that prove (b) and (d) work
+];
+
 export const MATRIX = [
   { id: 'peer', approval: 'approved:peer', when: () => true, why: 'every PR needs a peer review' },
   {
@@ -62,6 +78,12 @@ export const MATRIX = [
         'docs/THREAT-MODEL.md',
         '.github/CODEOWNERS',
       ]),
+  },
+  {
+    id: 'richtext',
+    approval: 'approved:security',
+    why: 'rich-text chokepoint or its checks (ADR 0002 (c))',
+    when: (f) => matchesAny(f, RICHTEXT_PATHS),
   },
   {
     id: 'a11y-perf',
