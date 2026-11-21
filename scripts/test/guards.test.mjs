@@ -181,11 +181,13 @@ test('tenant-guard: valid asset names pass', () => {
 });
 
 test('tenant-guard: dangerous content in YAML/Markdown', () => {
+  // Every rule must fire on its own example. More payloads (#132): tenant-guard-content.test.mjs.
   const cases = {
+    'html-tag': '<b>fet</b>',
     'html-script': 'x: "<script>alert(1)</script>"',
     'html-embed': '<iframe src="https://evil.example"></iframe>',
-    'event-handler': '<img src=x onerror="alert(1)">',
-    'js-url': 'cta: javascript:alert(1)',
+    'event-handler': '<img src=x onerror=alert(1)>',
+    'js-url': 'cta: javascript&#58;alert(1)',
     'insecure-url': 'link: http://example.com',
     'external-asset': 'style: https://cdn.example.com/x.css',
     'font-cdn': 'font: https://fonts.googleapis.com/css2?family=Inter',
