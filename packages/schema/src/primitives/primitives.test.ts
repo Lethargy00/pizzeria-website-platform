@@ -14,6 +14,8 @@ import {
   SafeUrl,
   Slug,
   TimeOfDay,
+  WEEKDAYS,
+  Weekday,
   isSafeAssetPath,
   isSafeUrl,
   localizedStringFor,
@@ -33,8 +35,11 @@ import {
   safeUrlFixtures,
   slugFixtures,
   timeOfDayFixtures,
+  weekdayFixtures,
   type Fixtures,
 } from './fixtures.js';
+import * as hours from '../hours/index.js';
+import * as menu from '../menu/index.js';
 import * as root from '../index.js';
 import pkg from '../../package.json' with { type: 'json' };
 
@@ -60,6 +65,41 @@ table('PhoneNumber', PhoneNumber, phoneNumberFixtures);
 table('SafeUrl', SafeUrl, safeUrlFixtures);
 table('AssetRef', AssetRef, assetRefFixtures);
 table('LocaleCode', LocaleCode, localeCodeFixtures);
+table('Weekday', Weekday, weekdayFixtures);
+
+describe('WEEKDAYS', () => {
+  it('pins the seven days in ISO order (Monday first)', () => {
+    expect(WEEKDAYS).toEqual([
+      'monday',
+      'tuesday',
+      'wednesday',
+      'thursday',
+      'friday',
+      'saturday',
+      'sunday',
+    ]);
+    expect(Weekday.options).toEqual([...WEEKDAYS]);
+  });
+
+  it('maps a JavaScript getDay() value to its id', () => {
+    const ids = [0, 1, 2, 3, 4, 5, 6].map((jsDay) => WEEKDAYS[(jsDay + 6) % 7]);
+    expect(ids).toEqual([
+      'sunday',
+      'monday',
+      'tuesday',
+      'wednesday',
+      'thursday',
+      'friday',
+      'saturday',
+    ]);
+  });
+
+  it('is the one list that hours and menu re-export', () => {
+    expect(hours.WEEKDAYS).toBe(WEEKDAYS);
+    expect(menu.WEEKDAYS).toBe(WEEKDAYS);
+    expect(menu.Weekday).toBe(Weekday);
+  });
+});
 table(
   'localizedStringFor([sv, en])',
   localizedStringFor(['sv', 'en']),

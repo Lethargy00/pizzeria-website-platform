@@ -5,6 +5,8 @@ import {
   PriceSEK,
   Slug,
   TimeOfDay,
+  WEEKDAYS,
+  Weekday,
   localizedStringFor,
   strictObject,
   type LocaleContext,
@@ -48,25 +50,6 @@ export type DietaryTag = z.infer<typeof DietaryTag>;
 export const MAX_SPICY_LEVEL = 3;
 export const SpicyLevel = z.int().min(1).max(MAX_SPICY_LEVEL);
 export type SpicyLevel = z.infer<typeof SpicyLevel>;
-
-// TODO(#144): move to primitives. Same list as WEEKDAYS in hours (#126); kept as a local copy
-// until then so this module imports no other domain schema.
-/**
- * Days of the week, ISO order (Monday first), as lowercase English day names (`monday`), the same
- * ids as `hours.yaml` (#126). Used by the lunch window and weekly specials. The days are local
- * days in `Europe/Stockholm`.
- */
-export const WEEKDAYS = [
-  'monday',
-  'tuesday',
-  'wednesday',
-  'thursday',
-  'friday',
-  'saturday',
-  'sunday',
-] as const;
-export const Weekday = z.enum(WEEKDAYS);
-export type Weekday = z.infer<typeof Weekday>;
 
 /** Limits that guard against runaway files. */
 export const MENU_LIMITS = {

@@ -42,4 +42,5 @@ export {
   type LocaleContext,
 } from './locale.js';
 export { MAX_PRICE_SEK, PriceSEK } from './price.js';
+export { WEEKDAYS, Weekday } from './weekday.js';
 export type { SafeHtml } from './safe-html.js';
