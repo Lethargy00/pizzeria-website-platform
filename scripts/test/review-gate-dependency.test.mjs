@@ -122,9 +122,32 @@ test('deps: reordered top-level fields do not count as a change', () => {
   assert.equal(dependencyFieldsChanged(j(BASE), j(reordered)).changed, false);
 });
 
-// #120 item 6: deep nesting makes JSON.stringify throw RangeError; the function must still
-// answer "changed" rather than throw.
-test('deps: very deep nesting fails closed instead of throwing', () => {
+// #120 item 6: a comparison that throws (JSON.stringify raises RangeError on deep nesting,
+// depending on the stack size) must answer "changed" rather than throw. The throw is forced
+// so the test does not depend on the Node version's stack size.
+test('deps: a comparison that throws fails closed instead of throwing', () => {
+  const base = j(BASE);
+  const head = with_({ exports: { './x': './x.ts' } }); // would be "not changed"
+  assert.equal(dependencyFieldsChanged(base, head).changed, false);
+  const stringify = JSON.stringify;
+  let r;
+  JSON.stringify = () => {
+    throw new RangeError('Maximum call stack size exceeded');
+  };
+  try {
+    assert.doesNotThrow(() => {
+      r = dependencyFieldsChanged(base, head);
+    });
+  } finally {
+    JSON.stringify = stringify;
+  }
+  assert.equal(r.changed, true);
+  assert.match(r.why, /comparison failed \(RangeError\)/);
+});
+
+// Real deep nesting: never throws, whatever the stack size. Unequal values are always
+// "changed"; equal ones may be "not changed" (compared fine) or "changed" (comparison threw).
+test('deps: very deep nesting never throws', () => {
   const d = 50000;
   const deep = `{"dependencies":${'['.repeat(d)}${']'.repeat(d)}}`;
   let r;
@@ -135,7 +158,7 @@ test('deps: very deep nesting fails closed instead of throwing', () => {
   assert.doesNotThrow(() => {
     r = dependencyFieldsChanged(deep, deep);
   });
-  assert.equal(r.changed, true);
+  assert.equal(typeof r.changed, 'boolean');
 });
 
 test('deps: a version bump inside dependencies is a dependency change', () => {
