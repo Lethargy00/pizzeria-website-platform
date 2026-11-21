@@ -57,6 +57,11 @@ export const PACKAGE_MANIFESTS = 'packages/*/package.json';
  * #120 added: bin (pnpm links it into dependents' node_modules/.bin, so it changes PATH),
  * name and version (they decide what a workspace: range resolves to), and devEngines, os,
  * cpu, libc (they decide whether and where a package installs).
+ * #143 added: directories (pnpm 10.28 links every file in directories.bin into dependents'
+ * node_modules/.bin when bin is absent, the same PATH change as bin) and publishConfig
+ * (with publishConfig.directory set and linkDirectory not false, pnpm links dependents to that
+ * directory instead of the package root, and records it in the lockfile). Both compare as a
+ * whole field: any edit inside them, including keys pnpm ignores today, counts as a change.
  */
 export const DEPENDENCY_FIELDS = [
   'dependencies',
@@ -80,6 +85,8 @@ export const DEPENDENCY_FIELDS = [
   'os',
   'cpu',
   'libc',
+  'directories',
+  'publishConfig',
 ];
 
 /** Install-time lifecycle scripts: pnpm install runs these, so they count as dependency changes. */
