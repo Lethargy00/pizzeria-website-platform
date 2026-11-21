@@ -65,6 +65,7 @@ Binding on every schema in `@pwp/schema` that contains text a visitor can see:
 - **No global or module-level locale state.** Factories may not read anything outside their argument.
 - The `LocaleContext` passed to a factory always comes from pass 1 of the site config (section 3). Nothing else builds one, except tests.
 - The context-free `LocalizedString` is only for platform-owned defaults, where no tenant exists. Tenant content never uses it.
+- **Per-locale documents are the exception.** A document that exists once per locale (a page Markdown file) holds plain strings plus a `locale` field instead of `localizedStringFor`, because each file carries one language. The loader checks that every enabled locale is covered across the files, and reports a missing one as `missing_locale`. See `packages/schema/src/pages/`.
 - `LocaleContext` stays `{ readonly locales: readonly LocaleCode[] }`. The default locale is not part of it, because schemas do not need it. Rendering gets `defaultLocale` from the validated `SiteConfig`.
 
 ### 3. `SiteConfig` is parsed in two passes
