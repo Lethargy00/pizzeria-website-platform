@@ -57,6 +57,7 @@ const NAMED_REFS = {
   tab: '\t',
   newline: '\n',
   sol: '/',
+  percnt: '%',
   lpar: '(',
   rpar: ')',
   equals: '=',
@@ -180,6 +181,9 @@ const AUTOLINK = String.raw`(?:https|mailto|tel):[^\s<>]*>|[a-z0-9._%+-]+@[a-z0-
 const HTML_VIEWS = ['yaml'];
 // One character of a MIME type or subtype (an RFC 9110 token), as in a data: URL's media type.
 const MIME_TOKEN = "[a-z0-9!#$%&'*+.^_`|~-]";
+// The same without "%", for the type part, so that "%2f" can only be the separator (#180). This
+// fixes where the type ends and keeps the rule linear.
+const MIME_TYPE_TOKEN = "[a-z0-9!#$&'*+.^_`|~-]";
 const ALL_VIEWS = ['yaml', 'decoded', 'stripped'];
 export const CONTENT_RULES = [
   {
@@ -214,14 +218,16 @@ export const CONTENT_RULES = [
     // by the shape of a data URL, data:[<type>/<subtype>][;params],<data> (#165): an optional MIME
     // type (RFC 9110 token characters) and then ";" or ",". Ending at the first ";" or "," keeps it
     // linear and catches parameters of any length or content. Whitespace around the MIME type is
-    // allowed, as browsers strip it.
+    // allowed, as browsers strip it. The separators may also be percent-encoded, "%2F" for "/" and
+    // "%3B" or "%2C" for ";" or "," (#180): the fetch spec does not decode them, but this is
+    // defence in depth and not every engine has been checked.
     id: 'js-url',
     re: new RegExp(
-      String.raw`(?<![a-z0-9+.-])(?:(?:javascript|vbscript)\s*:|data\s*:\s*(?:${MIME_TOKEN}+\/${MIME_TOKEN}+\s*)?[;,])`,
+      String.raw`(?<![a-z0-9+.-])(?:(?:javascript|vbscript)\s*:|data\s*:\s*(?:${MIME_TYPE_TOKEN}+(?:\/|%2f)${MIME_TOKEN}+?\s*)?(?:[;,]|%3b|%2c))`,
       'i',
     ),
     views: ALL_VIEWS,
-    msg: 'javascript:, vbscript: and data: URLs (data:…, or data:<type>/<subtype>…, followed by ";" or ",") are not allowed, also not when written with character references (&#58;, &colon;, &comma;, &#x61;) or split by tabs, newlines or invisible characters. Allowed schemes: https:, mailto:, tel:. The word "data:" followed by ordinary text, or a YAML key named data, is fine.',
+    msg: 'javascript:, vbscript: and data: URLs (data:…, or data:<type>/<subtype>…, followed by ";" or ",", also with "/", ";" or "," percent-encoded as %2F, %3B or %2C) are not allowed, also not when written with character references (&#58;, &colon;, &comma;, &#x61;) or split by tabs, newlines or invisible characters. Allowed schemes: https:, mailto:, tel:. The word "data:" followed by ordinary text, or a YAML key named data, is fine.',
   },
   {
     id: 'insecure-url',

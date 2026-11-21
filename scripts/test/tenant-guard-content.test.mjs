@@ -272,6 +272,54 @@ test('js-url: data: URLs fail, literally, entity-encoded and in Markdown links',
   }
 });
 
+// #180: the separators may be percent-encoded.
+test('js-url: data: URLs with percent-encoded separators fail', () => {
+  for (const s of [
+    'data:text%2Fhtml,x',
+    'DATA:text%2fhtml;base64,x',
+    '[x](data:text%2Fhtml,x)',
+    '[x](data:image%2Fsvg+xml;base64,PHN2Zz4=)',
+    '[x](data: text%2Fhtml ,x)',
+    '[x](data:text%2Fhtml%3Bbase64,PHNjcmlwdD4=)', // "%3B" as the parameter separator
+    '[x](data:text%2Fhtml%2Cx)', // "%2C" as the data separator
+    '[x](data:text/html%2cx)',
+    '[x](data:%2Cx)',
+    '[x](data:%3bbase64,PHNjcmlwdD4=)',
+    // Entity-encoded "%" or "/".
+    '[x](data:text&#37;2Fhtml,x)',
+    '[x](data:text&percnt;2fhtml,x)',
+    '[x](data&colon;text&#x25;2Fhtml&comma;x)',
+    'cta: "data:text\\x252Fhtml,x"', // YAML escape
+  ]) {
+    assert.ok(hits(s).includes('js-url'), JSON.stringify(s));
+  }
+});
+
+test('js-url: prose with "data:" and a percent sign passes', () => {
+  for (const s of [
+    'Uppdaterad data: 2026',
+    'Data: 20% rabatt, varje dag',
+    'data: 50%',
+    'Vi sparar data: 100%2 gånger',
+  ]) {
+    assert.deepEqual(hits(s), [], JSON.stringify(s));
+    assert.deepEqual(scan(s), [], JSON.stringify(s));
+  }
+});
+
+test('js-url: a long percent-encoded media type is scanned in reasonable time', () => {
+  for (const big of [
+    `data:a%2f${'a%2f'.repeat(100_000)}`,
+    `data:${'a%2f'.repeat(100_000)}`,
+    `data:a%2fa `.repeat(30_000),
+    `data:${'%'.repeat(100_000)}`,
+  ]) {
+    const start = Date.now();
+    assert.ok(!hits(big).includes('js-url'));
+    assert.ok(Date.now() - start < 3000, `took ${Date.now() - start} ms`);
+  }
+});
+
 test('js-url: the word "data:" in prose and a YAML key named data pass', () => {
   for (const s of [
     'Uppdaterad data: 2026',
