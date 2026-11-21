@@ -235,6 +235,58 @@ describe('mock-webhook: delivery, signing and retries', () => {
     expect(sent).toHaveLength(2);
   });
 
+  it('logs one failure with attempts 1 when the deadline runs out before attempt 2 (#121)', async () => {
+    let t = 0;
+    const logs: { attempts: number; status: number }[] = [];
+    const { notifier, sent } = make({
+      transport: statuses(500),
+      now: () => t,
+      // The wait overruns the deadline, so attempt 2 starts with no time left.
+      sleep: (ms) => {
+        t += ms + 5000;
+        return Promise.resolve();
+      },
+      logger: { info: (e) => logs.push(e) },
+    });
+    const err = await failure(notifier.notify(EVENT, { timeoutMs: 3000 }));
+    expect(err.code).toBe('unavailable');
+    expect(sent).toHaveLength(1);
+    expect(logs).toEqual([{ id: EVENT.id, type: EVENT.type, status: 0, attempts: 1 }]);
+  });
+
+  it('logs one failure with attempts 2 when the deadline runs out before attempt 3 (#121)', async () => {
+    let t = 0;
+    let waits = 0;
+    const logs: { attempts: number; status: number }[] = [];
+    const { notifier, sent } = make({
+      transport: statuses(500),
+      now: () => t,
+      sleep: (ms) => {
+        waits += 1;
+        // Only the second wait overruns the 30 s default deadline.
+        t += waits === 2 ? 40_000 : ms;
+        return Promise.resolve();
+      },
+      logger: { info: (e) => logs.push(e) },
+    });
+    const err = await failure(notifier.notify(EVENT));
+    expect(err.code).toBe('unavailable');
+    expect(sent).toHaveLength(2);
+    expect(logs).toEqual([{ id: EVENT.id, type: EVENT.type, status: 0, attempts: 2 }]);
+  });
+
+  it('logs one failure with attempts 0 when the deadline has already passed (#121)', async () => {
+    const logs: { attempts: number; status: number }[] = [];
+    const { notifier, sent } = make({
+      transport: statuses(500),
+      logger: { info: (e) => logs.push(e) },
+    });
+    const err = await failure(notifier.notify(EVENT, { timeoutMs: 0 }));
+    expect(err.code).toBe('timeout');
+    expect(sent).toHaveLength(0);
+    expect(logs).toEqual([{ id: EVENT.id, type: EVENT.type, status: 0, attempts: 0 }]);
+  });
+
   it('retry policy cannot be changed at runtime', () => {
     expect(WEBHOOK_RETRY_POLICY.maxAttempts).toBe(3);
     expect([...WEBHOOK_RETRY_POLICY.backoffMs]).toEqual([1000, 4000]);

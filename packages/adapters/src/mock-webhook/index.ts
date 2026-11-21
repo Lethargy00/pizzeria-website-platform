@@ -327,7 +327,12 @@ export function createMockWebhookNotifier(options: MockWebhookOptions): MockWebh
 
       for (let attempt = 1; attempt <= WEBHOOK_RETRY_POLICY.maxAttempts; attempt++) {
         const remaining = deadline - now();
-        if (remaining <= 0) throw attempt === 1 ? fail('timeout', 'webhook timed out') : lastError;
+        if (remaining <= 0) {
+          // The deadline passed before this attempt (before the first one, or during a wait).
+          // Break, not throw: the failure log below must run on every failed exit (#121).
+          if (attempt === 1) lastError = fail('timeout', 'webhook timed out');
+          break;
+        }
         let status = 0;
         attempts = attempt;
         try {
@@ -346,6 +351,8 @@ export function createMockWebhookNotifier(options: MockWebhookOptions): MockWebh
         if (deadline - now() <= wait) break;
         await sleep(wait);
       }
+      // Single failure exit: every failed path above breaks out of the loop to here (#121).
+      // `attempts` is the number of attempts this call made, 0 if the deadline had already passed.
       options.logger?.info({
         id: event.id,
         type: event.type,
