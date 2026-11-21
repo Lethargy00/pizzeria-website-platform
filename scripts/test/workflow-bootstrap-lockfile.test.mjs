@@ -146,6 +146,41 @@ test('the write token appears only in the final push step, and is not written to
   assert.match(script, /git push "https:\/\/x-access-token:\$\{GH_TOKEN\}@github\.com\//);
 });
 
+test('generate: every pnpm install runs with --ignore-scripts', () => {
+  const installs = steps('generate')
+    .filter((s) => /run: \|/.test(s))
+    .flatMap((s) => runScript(s).split('\n'))
+    .filter((l) => /\bpnpm (install|i|add)\b/.test(l));
+  assert.equal(installs.length, 2, 'the staleness check and the regeneration');
+  for (const l of installs) assert.match(l, /\bpnpm install\b[^|;&]*\s--ignore-scripts\b/, l);
+  assert.doesNotMatch(jobText('generate'), /\b(pnpm|npm) (rebuild|run|exec)\b|\bnpx\b/);
+});
+
+test('the uploaded and downloaded artifact names match', () => {
+  const name = (id, action) => {
+    const step = steps(id).find((s) => s.includes(`uses: actions/${action}@`));
+    assert.ok(step, `${id} uses ${action}`);
+    const m = /^\s+name: (\S+)\s*$/m.exec(step);
+    assert.ok(m, `${action} step names its artifact`);
+    return m[1];
+  };
+  assert.equal(name('generate', 'upload-artifact'), 'bootstrap-patch');
+  assert.equal(name('push', 'download-artifact'), name('generate', 'upload-artifact'));
+});
+
+test('push: applies the patch as binary and dispatches ci and security after pushing', () => {
+  const verifyScript = runScript(steps('push').find((s) => /^ {6}- id: verify$/m.test(s)));
+  assert.match(verifyScript, /^git apply --index --binary\b/m);
+  const last = runScript(steps('push').at(-1)).split('\n');
+  const at = (re) => last.findIndex((l) => re.test(l));
+  const push = at(/^git push /);
+  assert.ok(push >= 0, 'pushes');
+  for (const wf of ['ci', 'security']) {
+    const i = at(new RegExp(`^gh workflow run ${wf}\\.yml --ref main$`));
+    assert.ok(i > push, `dispatches ${wf}.yml after the push`);
+  }
+});
+
 // ---- verify script, run for real against fixtures ----
 
 const verifyStep = steps('push').find((s) => /^ {6}- id: verify$/m.test(s));
@@ -178,6 +213,7 @@ const BASE = {
   'packages/ui/src/sanitize.ts': 'export {};\n',
   'tenants/demo/site.json': '{}\n',
   'eslint.config.js': 'export default [];\n',
+  'docs/notes.txt': 'notes\n',
 };
 
 // Builds a repo from BASE (minus `omit`), applies `change`, turns it into a patch, resets, then
@@ -248,7 +284,8 @@ test('verify: rejects protected, new, deleted, mode-changed and symlinked paths'
       rmSync(join(r, 'pnpm-lock.yaml'));
       symlinkSync('/etc/passwd', join(r, 'pnpm-lock.yaml'));
     },
-    'non-format extension': (r) => put(r, 'docs/notes.txt', 'x\n'),
+    'new non-format file': (r) => put(r, 'docs/new.txt', 'x\n'),
+    'modified non-format file': (r) => put(r, 'docs/notes.txt', 'changed\n'),
   };
   for (const [name, change] of Object.entries(cases)) {
     const r = verify((repo) => {
@@ -258,7 +295,9 @@ test('verify: rejects protected, new, deleted, mode-changed and symlinked paths'
     assert.notEqual(r.status, 0, `${name} should be rejected:\n${r.stdout}${r.stderr}`);
     assert.match(r.stdout, /outside the allow-list/, name);
   }
-  rejected(verify((r) => put(r, 'docs/notes.txt', 'x\n')));
+  // FORMAT_PATHS on its own: an existing, unprotected, mode-100644 file without a Prettier
+  // extension may not be modified, even without a lockfile change alongside.
+  rejected(verify((r) => put(r, 'docs/notes.txt', 'changed\n')));
 });
 
 test('verify: a patch that does not apply is rejected', () => {
