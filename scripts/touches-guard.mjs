@@ -13,6 +13,10 @@
 // path allow-list above plus the full review-gate matrix, which still requires approved:peer,
 // approved:security on every Dependabot PR, and approved:architect for dependency files.
 //
+// Touches come only from a real issue (#131): the issues API also returns pull requests, so a
+// "Closes #n" that names this PR itself, or any object with a `pull_request` key, fails closed
+// before any Touches are read. Otherwise a PR author could grant itself `**` in its own body.
+//
 // Maintainers: "Update branch" (or any manual push) on a Dependabot PR adds a commit that is not
 // Dependabot's and breaks this check. Comment `@dependabot recreate` instead.
 import { pathToFileURL } from 'node:url';
@@ -103,18 +107,35 @@ function dependabotVerdict(files, commits) {
 }
 
 /**
+ * Normalise what `issueBody(n)` returned: a string (the body) or the issues API object.
+ * @returns {{ body: string, isPullRequest: boolean }}
+ */
+function asIssue(x) {
+  if (typeof x === 'string') return { body: x, isPullRequest: false };
+  if (!x || typeof x !== 'object') return { body: '', isPullRequest: false };
+  return {
+    body: typeof x.body === 'string' ? x.body : '',
+    isPullRequest: x.pull_request != null,
+  };
+}
+
+/**
  * Pure decision for one PR. `user` and `commits` must come from the pulls API.
+ * `number` is this PR's number; `issueBody(n)` returns the issues API object for #n (or only
+ * its body as a string, in tests).
  * @param {{
  *   user: { login?: string, type?: string, id?: number } | null,
  *   commits?: { sha: string, author: { login?: string, type?: string, id?: number } | null,
  *               committer?: { login?: string, type?: string, id?: number } | null, verified: boolean }[],
  *   files: string[],
  *   body: string,
- *   issueBody: (n: number) => Promise<string> | string,
+ *   number?: number | string,
+ *   issueBody: (n: number) => Promise<string | { body?: string | null, pull_request?: unknown }>
+ *     | string | { body?: string | null, pull_request?: unknown },
  * }} pr
  * @returns {Promise<{ ok: boolean, lines: string[] }>}
  */
-export async function evaluateTouches({ user, commits = [], files, body, issueBody }) {
+export async function evaluateTouches({ user, commits = [], files, body, number, issueBody }) {
   if (isDependabot(user)) return dependabotVerdict(files, commits);
   const n = closedIssue(body);
   if (!n) {
@@ -125,7 +146,26 @@ export async function evaluateTouches({ user, commits = [], files, body, issueBo
       ],
     };
   }
-  const globs = parseTouches(await issueBody(n));
+  if (number != null && Number(number) === n) {
+    return {
+      ok: false,
+      lines: [
+        `✗ "Closes #${n}" names this pull request itself. Close the issue that defines the ` +
+          'Touches (AGENTS.md §6), not the PR.',
+      ],
+    };
+  }
+  const issue = asIssue(await issueBody(n));
+  if (issue.isPullRequest) {
+    return {
+      ok: false,
+      lines: [
+        `✗ #${n} is a pull request, not an issue. Touches must come from the issue the PR ` +
+          'closes (AGENTS.md §6).',
+      ],
+    };
+  }
+  const globs = parseTouches(issue.body);
   if (!globs.length) {
     return {
       ok: false,
@@ -145,7 +185,8 @@ export async function evaluateTouches({ user, commits = [], files, body, issueBo
   return { ok: true, lines: [`touches-guard: OK (${files.length} files within #${n})`] };
 }
 
-async function issueBody(repo, n) {
+/** The issues API object for #n (pull requests come back too, with a `pull_request` key). */
+export async function fetchIssue(repo, n) {
   const res = await fetch(`https://api.github.com/repos/${repo}/issues/${n}`, {
     headers: {
       authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
@@ -153,7 +194,7 @@ async function issueBody(repo, n) {
     },
   });
   if (!res.ok) throw new Error(`issue #${n}: ${res.status}`);
-  return (await res.json()).body ?? '';
+  return await res.json();
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -176,7 +217,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     commits,
     files,
     body,
-    issueBody: (n) => issueBody(repo, n),
+    number: pr,
+    issueBody: (n) => fetchIssue(repo, n),
   });
   for (const l of r.lines) (r.ok ? console.log : console.error)(l);
   if (!r.ok) process.exit(1);
