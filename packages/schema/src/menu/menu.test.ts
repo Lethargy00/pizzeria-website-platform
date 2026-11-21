@@ -91,7 +91,15 @@ describe('enums', () => {
 
   it('has the dietary tags and weekdays of the contract', () => {
     expect(DIETARY_TAGS).toEqual(['vegan', 'vegetarian', 'gluten-free', 'lactose-free']);
-    expect(WEEKDAYS).toEqual(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
+    expect(WEEKDAYS).toEqual([
+      'monday',
+      'tuesday',
+      'wednesday',
+      'thursday',
+      'friday',
+      'saturday',
+      'sunday',
+    ]);
   });
 });
 

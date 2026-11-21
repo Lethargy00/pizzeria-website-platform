@@ -80,7 +80,7 @@ export const realisticMenu = {
   lunch: {
     title: t('Dagens lunch', 'Lunch of the day'),
     description: t('Inklusive sallad, bröd och kaffe.', 'Includes salad, bread and coffee.'),
-    weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    weekdays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
     start: '11:00',
     end: '14:00',
     items: [
@@ -103,7 +103,7 @@ export const realisticMenu = {
       id: 'fredagspizza',
       name: t('Fredagspizza', 'Friday pizza'),
       price: 99,
-      weekdays: ['fri'],
+      weekdays: ['friday'],
       allergens: ['gluten', 'milk'],
     },
     {
@@ -145,7 +145,7 @@ export const validMenuFixtures: readonly { readonly name: string; readonly input
   { name: 'every allergen once', input: withItem({ allergens: allAllergens() }) },
   {
     name: 'lunch on one day',
-    input: { ...minimalMenu, lunch: { ...realisticMenu.lunch, weekdays: ['sat'] } },
+    input: { ...minimalMenu, lunch: { ...realisticMenu.lunch, weekdays: ['saturday'] } },
   },
 ];
 
@@ -182,7 +182,7 @@ const special = {
   id: 'fredagspizza',
   name: t('Fredagspizza', 'Friday pizza'),
   price: 99,
-  weekdays: ['fri'],
+  weekdays: ['friday'],
 };
 
 /**
@@ -390,13 +390,23 @@ export const invalidMenuFixtures: readonly {
     path: ['lunch', 'weekdays'],
   },
   {
+    name: 'lunch weekday abbreviated',
+    input: { ...minimalMenu, lunch: { ...lunch, weekdays: ['mon'] } },
+    path: ['lunch', 'weekdays', 0],
+  },
+  {
+    name: 'special weekday abbreviated',
+    input: { ...minimalMenu, specials: [{ ...special, weekdays: ['fri'] }] },
+    path: ['specials', 0, 'weekdays', 0],
+  },
+  {
     name: 'lunch weekday in Swedish',
-    input: { ...minimalMenu, lunch: { ...lunch, weekdays: ['mån'] } },
+    input: { ...minimalMenu, lunch: { ...lunch, weekdays: ['måndag'] } },
     path: ['lunch', 'weekdays', 0],
   },
   {
     name: 'lunch repeated weekday',
-    input: { ...minimalMenu, lunch: { ...lunch, weekdays: ['mon', 'mon'] } },
+    input: { ...minimalMenu, lunch: { ...lunch, weekdays: ['monday', 'monday'] } },
     path: ['lunch', 'weekdays', 1],
   },
   {
