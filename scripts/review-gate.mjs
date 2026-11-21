@@ -40,6 +40,11 @@ export const DEPENDENCY_PATHS = [
   'playground/package.json',
   'pnpm-workspace.yaml',
   '.npmrc',
+  // #128: pnpm install loads the root pnpmfile and runs its code and hooks (readPackage,
+  // afterAllResolved), even with --ignore-scripts. A pnpmfile path set in .npmrc or
+  // pnpm-workspace.yaml is already covered by those two entries.
+  '.pnpmfile.cjs',
+  '.pnpmfile.mjs',
   ...ALT_MANIFESTS,
 ];
 
@@ -181,6 +186,7 @@ export const MATRIX = [
         'scripts/touches-guard.mjs',
         'scripts/*-guard.mjs', // every gate script, including future ones (#93)
         'scripts/lib/**', // shared by the gates: glob.mjs can blind them all (#93)
+        'scripts/check-licenses.mjs', // the license gate in security.yml (#128)
         '**/.env.example',
         'SECURITY.md',
         'docs/SECURITY.md',
