@@ -403,3 +403,22 @@ export const localizedStringAnyFixtures: Fixtures = {
   valid: [{ sv: 'Meny' }, { en: 'Menu' }, { sv: 'Meny', en: 'Menu' }],
   invalid: [...NOT_STRINGS, {}, { de: 'Speisekarte' }, { sv: '' }, { sv: 'Meny', fr: 'Carte' }],
 };
+
+/** For `Weekday` (#144): lowercase English day names only. */
+export const weekdayFixtures: Fixtures = {
+  valid: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+  invalid: [
+    ...NOT_STRINGS,
+    '',
+    'Monday',
+    'MONDAY',
+    'mon',
+    'fri',
+    'måndag',
+    ' monday',
+    'monday ',
+    'weekend',
+    0,
+    7,
+  ],
+};

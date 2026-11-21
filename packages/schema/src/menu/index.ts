@@ -6,7 +6,11 @@
  * location ids used in `overrides`. Prices are written in kronor and parsed to integer öre
  * (`PriceSEK`). Names and descriptions are plain text, never Markdown. This module imports no
  * other domain schema.
+ *
+ * `WEEKDAYS` and `Weekday` (schema and type) are re-exported from `@pwp/schema/primitives`
+ * (#144), the same list `@pwp/schema/hours` uses.
  */
+export { WEEKDAYS, Weekday } from '../primitives/index.js';
 export {
   ALLERGENS,
   Allergen,
@@ -14,8 +18,6 @@ export {
   DietaryTag,
   MAX_SPICY_LEVEL,
   SpicyLevel,
-  WEEKDAYS,
-  Weekday,
   MENU_LIMITS,
   MenuId,
   ItemOverride,

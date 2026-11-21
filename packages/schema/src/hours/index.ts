@@ -5,10 +5,13 @@
  * `hoursSchema(ctx)` is a factory of the tenant's `LocaleContext` (ADR 0003), because notes are
  * shown to visitors. The "open now" calculation is not here: it lives in `@pwp/core` (#30), which
  * reads intervals with {@link intervalSpan}.
+ *
+ * `WEEKDAYS` and the `Weekday` type are re-exported from `@pwp/schema/primitives` (#144), where
+ * the one weekday list of the schema package lives.
  */
+export { WEEKDAYS, type Weekday } from '../primitives/index.js';
 export {
   HOURS_TIME_ZONE,
-  WEEKDAYS,
   HOLIDAY_IDS,
   HolidayId,
   MAX_INTERVALS_PER_DAY,
@@ -23,7 +26,6 @@ export {
   hoursExceptionSchema,
   locationHoursSchema,
   hoursSchema,
-  type Weekday,
   type Hours,
   type LocationHours,
   type HolidayRule,
