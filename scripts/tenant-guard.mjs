@@ -51,6 +51,9 @@ const MAX_TEXT_BYTES = 1_000_000;
 // costs nothing). Unknown names are left as they are.
 const NAMED_REFS = {
   colon: ':',
+  comma: ',',
+  semi: ';',
+  plus: '+',
   tab: '\t',
   newline: '\n',
   sol: '/',
@@ -175,6 +178,8 @@ const AUTOLINK = String.raw`(?:https|mailto|tel):[^\s<>]*>|[a-z0-9._%+-]+@[a-z0-
 // `views` names the normalizeForScan views it also runs on, which catch YAML-escaped,
 // entity-encoded and control-character-split payloads.
 const HTML_VIEWS = ['yaml'];
+// One character of a MIME type or subtype (an RFC 9110 token), as in a data: URL's media type.
+const MIME_TOKEN = "[a-z0-9!#$%&'*+.^_`|~-]";
 const ALL_VIEWS = ['yaml', 'decoded', 'stripped'];
 export const CONTENT_RULES = [
   {
@@ -204,10 +209,19 @@ export const CONTENT_RULES = [
     msg: 'Inline event handlers (<img onerror=…>, <a onclick=…>) are not allowed, also not when the tag is written with character references or YAML escapes.',
   },
   {
+    // javascript: and vbscript: fail wherever they appear (fail closed). "data:" is an ordinary
+    // word ("Dina data: namn, adress") and a common YAML key, so it fails only when it is followed
+    // by the shape of a data URL, data:[<type>/<subtype>][;params],<data> (#165): an optional MIME
+    // type (RFC 9110 token characters) and then ";" or ",". Ending at the first ";" or "," keeps it
+    // linear and catches parameters of any length or content. Whitespace around the MIME type is
+    // allowed, as browsers strip it.
     id: 'js-url',
-    re: /(?<![a-z0-9+.-])(javascript|vbscript|data)\s*:/i,
+    re: new RegExp(
+      String.raw`(?<![a-z0-9+.-])(?:(?:javascript|vbscript)\s*:|data\s*:\s*(?:${MIME_TOKEN}+\/${MIME_TOKEN}+\s*)?[;,])`,
+      'i',
+    ),
     views: ALL_VIEWS,
-    msg: 'javascript:, vbscript: and data: URLs are not allowed, also not when written with character references (&#58;, &colon;, &#x61;) or split by tabs, newlines or invisible characters. Allowed schemes: https:, mailto:, tel:.',
+    msg: 'javascript:, vbscript: and data: URLs (data:…, or data:<type>/<subtype>…, followed by ";" or ",") are not allowed, also not when written with character references (&#58;, &colon;, &comma;, &#x61;) or split by tabs, newlines or invisible characters. Allowed schemes: https:, mailto:, tel:. The word "data:" followed by ordinary text, or a YAML key named data, is fine.',
   },
   {
     id: 'insecure-url',
