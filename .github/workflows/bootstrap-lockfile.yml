@@ -26,12 +26,14 @@ concurrency:
 #   - pnpm-lock.yaml may be added or modified (regular file, mode 100644);
 #   - any other path may only be MODIFIED (no add/delete/rename/mode change, mode 100644 on
 #     both sides), must match FORMAT_PATHS (extensions Prettier formats here) and must NOT
-#     match PROTECTED_PATHS (dot paths, scripts, tenants, manifests and tool config, security
-#     docs and security-review paths). A formatting change to a protected file fails the run:
-#     format it in a reviewed PR instead (ci runs format:check on every PR).
+#     match PROTECTED_PATHS: dot paths, scripts, tenants, e2e, manifests and tool config, and
+#     every path that needs architect, dependency, security or richtext review in
+#     scripts/review-gate.mjs (the test checks each tracked file and one sample per matrix glob,
+#     so a new matrix path that this regex misses fails CI). A formatting change to a protected
+#     file fails the run: format it in a reviewed PR instead (ci runs format:check on PRs).
 env:
   FORMAT_PATHS: '\.(md|mdx|json|jsonc|json5|yaml|yml|css|scss|html|astro|js|mjs|cjs|jsx|ts|mts|cts|tsx)$'
-  PROTECTED_PATHS: '(^|/)\.|^(scripts|tenants|e2e)/|^packages/(cli|functions|adapters|schema)/|(^|/)(package\.(json|yaml|json5)|pnpm-workspace\.yaml|turbo\.json|tsconfig[^/]*\.json|[^/]*\.config\.[^/]*)$|^(AGENTS|PROMPT|SECURITY)\.md$|^docs/(SECURITY|THREAT-MODEL|DECISIONS|DEPENDENCIES)\.md$|^docs/adr/|[Ss]anitiz|[Cc]sp|/headers/|Form'
+  PROTECTED_PATHS: '(^|/)\.|^(scripts|tenants|e2e)/|^packages/(cli|functions|adapters|schema)/|^packages/core/src/richtext/|^packages/[^/]+/src/contracts/|(^|/)(package\.(json|yaml|json5)|pnpm-workspace\.yaml|turbo\.json|tsconfig[^/]*\.json|[^/]*\.config\.[^/]*)$|^(AGENTS|PROMPT|SECURITY)\.md$|^docs/(SECURITY|THREAT-MODEL|DECISIONS|DEPENDENCIES)\.md$|^docs/adr/|[Ss]anitiz|[Cc]sp|/headers/|Form'
 jobs:
   generate:
     if: github.ref == 'refs/heads/main'

@@ -181,6 +181,86 @@ test('push: applies the patch as binary and dispatches ci and security after pus
   }
 });
 
+// ---- allow-list vs review matrix (drift) ----
+
+// Every path that review-gate sends to architect, dependency, security or richtext review must be
+// one the push job refuses. Checked for every tracked file and for one sample per matrix glob, so
+// a path added to the matrix (or a file added to the repo) that PROTECTED_PATHS misses fails CI.
+const REVIEWED_ROWS = ['architect', 'dependency', 'security', 'richtext'];
+const MATRIX_SAMPLES = [
+  // security row
+  'packages/functions/src/order.ts',
+  'packages/adapters/src/stripe/index.ts',
+  'packages/ui/src/components/ContactForm/ContactForm.astro',
+  'packages/ui/src/sanitize/index.ts',
+  'packages/core/src/sanitizer.ts',
+  'packages/core/src/csp/policy.ts',
+  'packages/core/src/build-csp.ts',
+  'packages/core/src/headers/index.ts',
+  'packages/cli/src/build/index.ts',
+  'packages/cli/src/isolation/index.ts',
+  '.github/workflows/ci.yml',
+  'scripts/tenant-guard.mjs',
+  'scripts/review-gate.mjs',
+  'scripts/touches-guard.mjs',
+  'scripts/new-guard.mjs',
+  'scripts/lib/glob.mjs',
+  'scripts/check-licenses.mjs',
+  'packages/adapters/.env.example',
+  'SECURITY.md',
+  'docs/SECURITY.md',
+  'docs/THREAT-MODEL.md',
+  '.github/CODEOWNERS',
+  // richtext row
+  'packages/core/src/richtext/render.ts',
+  'packages/core/src/richtext/safe-html.ts',
+  'packages/core/src/richtext/schema.ts',
+  'packages/core/src/richtext/index.ts',
+  'packages/core/package.json',
+  'scripts/boundaries.json',
+  'scripts/check-boundaries.mjs',
+  'scripts/check-html-sinks.mjs',
+  'scripts/test/richtext-render.test.mjs',
+  'scripts/test/check-html-sink.test.mjs',
+  // architect row
+  'packages/schema/src/menu/menu.ts',
+  'packages/ui/src/contracts/hero.ts',
+  'packages/adapters/src/interfaces/content.ts',
+  'docs/adr/0001-example.md',
+  'packages/ui/package.json',
+  'packages/ui/package.yaml',
+  'packages/ui/package.json5',
+  // dependency row
+  'package.json',
+  'package.yaml',
+  'playground/package.json',
+  'playground/package.json5',
+  'pnpm-workspace.yaml',
+  '.npmrc',
+  '.pnpmfile.cjs',
+  '.pnpmfile.mjs',
+];
+
+test('allow-list: every path review-gate sends to a non-peer reviewer is refused', async () => {
+  const { MATRIX } = await import('../review-gate.mjs');
+  const rows = MATRIX.filter((r) => REVIEWED_ROWS.includes(r.id));
+  assert.equal(rows.length, REVIEWED_ROWS.length, 'all reviewed rows still exist');
+  const reviewed = (f) => rows.some((r) => r.when(f, [], {}));
+  const format = new RegExp(topEnv('FORMAT_PATHS'));
+  const protectedRe = new RegExp(topEnv('PROTECTED_PATHS'));
+  const allowedByVerify = (f) => format.test(f) && !protectedRe.test(f);
+
+  for (const f of MATRIX_SAMPLES) assert.ok(reviewed(f), `sample ${f} no longer hits the matrix`);
+  const ls = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' });
+  const tracked = ls.status === 0 ? ls.stdout.split('\0').filter(Boolean) : [];
+  assert.ok(tracked.length > 0, 'git ls-files works in the checkout');
+
+  const leaks = [...new Set([...MATRIX_SAMPLES, ...tracked])]
+    .filter((f) => f !== 'pnpm-lock.yaml') // the one reviewed path the job exists to write
+    .filter((f) => reviewed(f) && allowedByVerify(f));
+  assert.deepEqual(leaks, [], 'reviewed paths that the push job would accept');
+});
+
 // ---- verify script, run for real against fixtures ----
 
 const verifyStep = steps('push').find((s) => /^ {6}- id: verify$/m.test(s));
@@ -215,6 +295,8 @@ const BASE = {
   'eslint.config.js': 'export default [];\n',
   'docs/notes.txt': 'notes\n',
   'packages/ui/package.yaml': 'name: ui\n',
+  'packages/core/src/richtext/render.ts': 'export const render = 1;\n',
+  'packages/ui/src/contracts/hero.ts': 'export {};\n',
 };
 
 // Builds a repo from BASE (minus `omit`), applies `change`, turns it into a patch, resets, then
@@ -275,6 +357,9 @@ test('verify: rejects protected, new, deleted, mode-changed and symlinked paths'
     'gate script': (r) => put(r, 'scripts/review-gate.mjs', 'process.exit(0);\n'),
     'security doc': (r) => put(r, 'docs/SECURITY.md', '# none\n'),
     'cli package': (r) => put(r, 'packages/cli/src/b.ts', 'export const b = 1;\n'),
+    'richtext chokepoint': (r) =>
+      put(r, 'packages/core/src/richtext/render.ts', 'export const render = 2;\n'),
+    'package contract': (r) => put(r, 'packages/ui/src/contracts/hero.ts', 'export const h = 1;\n'),
     'sanitizer path': (r) => put(r, 'packages/ui/src/sanitize.ts', 'export const s = 1;\n'),
     tenant: (r) => put(r, 'tenants/demo/site.json', '{ "x": 1 }\n'),
     'tool config': (r) => put(r, 'eslint.config.js', 'export default [{}];\n'),
