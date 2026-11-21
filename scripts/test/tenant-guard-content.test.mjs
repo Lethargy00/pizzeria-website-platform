@@ -236,6 +236,77 @@ test('js-url: ordinary text and allowed schemes pass', () => {
     assert.deepEqual(hits(s), [], s);
 });
 
+// #165: "data:" fails only when it is followed by the shape of a data URL.
+test('js-url: data: URLs fail, literally, entity-encoded and in Markdown links', () => {
+  for (const s of [
+    'data:text/html,<b>x</b>',
+    'data:text/html,%3Cscript%3E',
+    'data:,x',
+    'data:;base64,PHNjcmlwdD4=',
+    '[x](data:image/svg+xml;base64,PHN2Zz4=)',
+    '[x](data:text/html;charset=utf-8,x)',
+    '[x](data:text/html; charset=utf-8,x)', // whitespace in the parameters
+    '[x](data: text/html ,x)', // whitespace around the media type, stripped by browsers
+    `[x](data:text/html;x=${'a'.repeat(5000)},x)`, // parameters of any length
+    '[x](data:text/html;x=a:b,x)', // ":" in a parameter
+    'cta: "data:text/html,x"',
+    // Entity-encoded scheme, separator or parameters.
+    '[x](data&#58;text/html,x)',
+    '[x](data&colon;,x)',
+    '[x](data:&comma;x)',
+    '[x](data:&#44;x)',
+    '[x](data:&semi;base64,PHNjcmlwdD4=)',
+    '[x](data&colon;image/svg&plus;xml&semi;base64&comma;PHN2Zz4=)',
+    '[x](data&#x3a;image/svg&#43;xml&#59;base64&#44;PHN2Zz4=)',
+    '[x](&#100;ata:,x)',
+    '[x](da&Tab;ta:,x)',
+    '[x](da​ta:text/html,x)',
+    '[x](data\\:text/html,x)', // Markdown backslash escape
+    '[x](data&amp;#58;,x)', // double encoded
+    'cta: "data\\x3a,x"', // YAML escape
+    '[x][r]\n\n[r]: data:text/html,x', // reference-style definition
+  ]) {
+    assert.ok(hits(s).includes('js-url'), JSON.stringify(s));
+    const problems = scan(s).filter((p) => p.rule === 'js-url');
+    assert.ok(problems.length >= 2, `${JSON.stringify(s)}: ${JSON.stringify(problems)}`);
+  }
+});
+
+test('js-url: the word "data:" in prose and a YAML key named data pass', () => {
+  for (const s of [
+    'Uppdaterad data: 2026',
+    'Dina data: namn, adress och telefonnummer.',
+    'Vi sparar följande data: e-post; telefon.',
+    'Senaste data:\n\n- 2026-01-01',
+    'metadata: x',
+    'data: 2026-11-21',
+    'Our data: name, address',
+  ]) {
+    assert.deepEqual(hits(s), [], JSON.stringify(s));
+    assert.deepEqual(scan(s), [], JSON.stringify(s)); // as a Markdown line and as a YAML string
+  }
+  const r = tmp();
+  put(r, 't/content/menu.yaml', 'data:\n  title: Meny\n  items:\n    - name: Margherita\n');
+  put(
+    r,
+    't/content/list.yaml',
+    'sections:\n  - type: hours\n    data: {open: "11", close: "22"}\n',
+  );
+  assert.deepEqual(checkTenants(r), []);
+});
+
+test('js-url: javascript: and vbscript: still fail closed, also in prose', () => {
+  for (const s of ['Vi använder inte javascript: bara HTML', 'vbscript: nej'])
+    assert.ok(hits(s).includes('js-url'), s);
+});
+
+test('js-url: a long run of "data:" with whitespace is scanned in reasonable time', () => {
+  const big = `data:${' '.repeat(50)}`.repeat(18_000);
+  const start = Date.now();
+  assert.ok(!hits(big).includes('js-url'));
+  assert.ok(Date.now() - start < 3000, `took ${Date.now() - start} ms`);
+});
+
 test('a decoded match is reported on the line of its source text', () => {
   const r = tmp();
   put(r, 't/content/x.md', 'rad 1\nrad 2\n[x](jav&#x61;script&colon;alert(1))\n');

@@ -43,4 +43,5 @@ export {
 } from './locale.js';
 export { MAX_PRICE_SEK, PriceSEK } from './price.js';
 export { WEEKDAYS, Weekday } from './weekday.js';
+export { MAX_ISO_DATE_TIME_LENGTH, IsoDateTime } from './datetime.js';
 export type { SafeHtml } from './safe-html.js';

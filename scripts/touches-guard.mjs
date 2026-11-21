@@ -17,6 +17,11 @@
 // "Closes #n" that names this PR itself, or any object with a `pull_request` key, fails closed
 // before any Touches are read. Otherwise a PR author could grant itself `**` in its own body.
 //
+// Touches come only from a trusted issue (#150): AGENTS.md §6 says the Orchestrator sets them, so
+// the issue must carry an `agent:*` label (only triage/write users can set labels) and have
+// author_association OWNER, MEMBER or COLLABORATOR (no hard-coded logins). fetchIssue refuses
+// redirects (a transferred issue answers 301 to another repo) and checks repository_url and number.
+//
 // Maintainers: "Update branch" (or any manual push) on a Dependabot PR adds a commit that is not
 // Dependabot's and breaks this check. Comment `@dependabot recreate` instead.
 import { pathToFileURL } from 'node:url';
@@ -106,17 +111,52 @@ function dependabotVerdict(files, commits) {
   };
 }
 
+/** author_association values trusted to define Touches (#150): people with a role in the repo. */
+export const TRUSTED_ASSOCIATIONS = Object.freeze(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+/** Label names from the issues API (objects with `name`, or plain strings). */
+function labelNames(labels) {
+  if (!Array.isArray(labels)) return [];
+  return labels
+    .map((l) => (typeof l === 'string' ? l : l && typeof l.name === 'string' ? l.name : ''))
+    .filter(Boolean);
+}
+
 /**
- * Normalise what `issueBody(n)` returned: a string (the body) or the issues API object.
- * @returns {{ body: string, isPullRequest: boolean }}
+ * Normalise what `issueBody(n)` returned: the issues API object (or, in old tests, only a
+ * string body, which carries no labels or author and so is never trusted).
+ * @returns {{ body: string, isPullRequest: boolean, labels: string[], association: string }}
  */
 function asIssue(x) {
-  if (typeof x === 'string') return { body: x, isPullRequest: false };
-  if (!x || typeof x !== 'object') return { body: '', isPullRequest: false };
+  if (typeof x === 'string') return { body: x, isPullRequest: false, labels: [], association: '' };
+  if (!x || typeof x !== 'object') {
+    return { body: '', isPullRequest: false, labels: [], association: '' };
+  }
   return {
     body: typeof x.body === 'string' ? x.body : '',
     isPullRequest: x.pull_request != null,
+    labels: labelNames(x.labels),
+    association: typeof x.author_association === 'string' ? x.author_association : '',
   };
+}
+
+/** Why #n may not define Touches (#150), or [] when it may. */
+function untrusted(n, issue) {
+  const lines = [];
+  if (!issue.labels.some((l) => /^agent:\S+$/.test(l))) {
+    lines.push(
+      `✗ Issue #${n} has no agent:* label. Touches are trusted only on an issue the Orchestrator ` +
+        'assigned (AGENTS.md §6): add an agent:<id> label to the issue, then re-run this check.',
+    );
+  }
+  if (!TRUSTED_ASSOCIATIONS.includes(issue.association)) {
+    lines.push(
+      `✗ Issue #${n} was opened by an author with association ${issue.association || '(none)'}; ` +
+        `Touches are trusted only from ${TRUSTED_ASSOCIATIONS.join(', ')}. Ask the Orchestrator to ` +
+        'open the issue (or copy it into a new one) and close that issue instead.',
+    );
+  }
+  return lines;
 }
 
 /**
@@ -130,9 +170,10 @@ function asIssue(x) {
  *   files: string[],
  *   body: string,
  *   number?: number | string,
- *   issueBody: (n: number) => Promise<string | { body?: string | null, pull_request?: unknown }>
- *     | string | { body?: string | null, pull_request?: unknown },
+ *   issueBody: (n: number) => Promise<string | IssueObject> | string | IssueObject,
  * }} pr
+ * @typedef {{ body?: string | null, pull_request?: unknown, labels?: unknown[],
+ *   author_association?: string }} IssueObject
  * @returns {Promise<{ ok: boolean, lines: string[] }>}
  */
 export async function evaluateTouches({ user, commits = [], files, body, number, issueBody }) {
@@ -165,6 +206,8 @@ export async function evaluateTouches({ user, commits = [], files, body, number,
       ],
     };
   }
+  const distrust = untrusted(n, issue);
+  if (distrust.length) return { ok: false, lines: distrust };
   const globs = parseTouches(issue.body);
   if (!globs.length) {
     return {
@@ -185,16 +228,48 @@ export async function evaluateTouches({ user, commits = [], files, body, number,
   return { ok: true, lines: [`touches-guard: OK (${files.length} files within #${n})`] };
 }
 
-/** The issues API object for #n (pull requests come back too, with a `pull_request` key). */
+/**
+ * The issues API object for #n (pull requests come back too, with a `pull_request` key).
+ * Fails closed (#150) on any redirect (a transferred issue answers 301 to another repository),
+ * and when the returned object is not issue #n of `repo`.
+ */
 export async function fetchIssue(repo, n) {
-  const res = await fetch(`https://api.github.com/repos/${repo}/issues/${n}`, {
-    headers: {
-      authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-      accept: 'application/vnd.github+json',
-    },
-  });
-  if (!res.ok) throw new Error(`issue #${n}: ${res.status}`);
-  return await res.json();
+  let res;
+  try {
+    res = await fetch(`https://api.github.com/repos/${repo}/issues/${n}`, {
+      redirect: 'error',
+      headers: {
+        authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+        accept: 'application/vnd.github+json',
+      },
+    });
+  } catch (e) {
+    throw new Error(
+      `✗ issue #${n}: request failed or was redirected (${e?.message ?? e}). A transferred ` +
+        `issue answers with a redirect to another repository and is refused: close an issue in ${repo}.`,
+      { cause: e },
+    );
+  }
+  if (res.status >= 300 && res.status < 400) {
+    throw new Error(
+      `✗ issue #${n}: redirected (HTTP ${res.status}); it was probably transferred out of ${repo}. ` +
+        `Close an issue in ${repo}.`,
+    );
+  }
+  if (!res.ok) throw new Error(`✗ issue #${n}: HTTP ${res.status}`);
+  const issue = await res.json();
+  const want = `https://api.github.com/repos/${repo}`.toLowerCase();
+  const got = typeof issue?.repository_url === 'string' ? issue.repository_url : '';
+  if (got.toLowerCase() !== want) {
+    throw new Error(
+      `✗ issue #${n}: repository_url is ${got || '(missing)'}, not ${repo}. Touches are read only ` +
+        `from issues in ${repo}; close an issue in this repository.`,
+    );
+  }
+  if (Number(issue.number) !== Number(n)) {
+    throw new Error(`✗ issue #${n}: the API returned #${issue.number ?? '(none)'} instead.`);
+  }
+  return issue;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -212,14 +287,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error(e.message);
     process.exit(1);
   }
-  const r = await evaluateTouches({
-    user,
-    commits,
-    files,
-    body,
-    number: pr,
-    issueBody: (n) => fetchIssue(repo, n),
-  });
+  let r;
+  try {
+    r = await evaluateTouches({
+      user,
+      commits,
+      files,
+      body,
+      number: pr,
+      issueBody: (n) => fetchIssue(repo, n),
+    });
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
   for (const l of r.lines) (r.ok ? console.log : console.error)(l);
   if (!r.ok) process.exit(1);
 }
