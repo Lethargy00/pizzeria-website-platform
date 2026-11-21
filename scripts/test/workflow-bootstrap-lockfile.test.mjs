@@ -437,6 +437,7 @@ test('verify: a formatting change to any code file fails the run instead of bein
     'packages/ui/src/Card.astro',
     'packages/ui/src/i.mdx',
     'playground/index.html',
+    'playground/legacy.htm',
     'packages/ui/src/j.vue',
     'packages/ui/src/k.svelte',
   ];
@@ -580,6 +581,9 @@ test('verify: rejects git, URL, file: and link: entries the base lockfile does n
       '        version: 3.6.2\n',
       '        version: ftp://evil.example/x.tgz\n',
     ],
+    'ssh: shorthand': ['        version: 3.6.2\n', '        version: ssh:evil.example/x\n'],
+    'git+ssh: shorthand': ['        version: 3.6.2\n', '        version: git+ssh:evil.example/x\n'],
+    'commit-only resolution': addPackage('  x@1.0.0:\n    resolution: {commit: abc}\n'),
     'github shorthand': ['        version: 3.6.2\n', '        version: github:a/x#abc\n'],
     'scp-style git': ['        version: 3.6.2\n', '        version: git@github.com:a/x.git\n'],
     'file: directory': addPackage(
@@ -602,9 +606,14 @@ test('verify: rejects git, URL, file: and link: entries the base lockfile does n
 });
 
 test('verify: rejects lockfile YAML that could hide or move an entry from the line checks', () => {
-  const form = /line=\d+,.*YAML anchor, alias, tag, merge key, directive, document marker/;
+  const form = /line=\d+,.*YAML anchor, alias, tag, merge key, document marker, explicit key/;
   const chars = /line=\d+,.*tab, carriage return, backslash escape or Unicode line break/;
   const expect = {
+    // security-29 (#195): '"' has an even count of both quote characters, so only the
+    // double-quote ban sees the open "..." that turns the next lines into fake parent keys.
+    'double-quoted value spoofing parent keys':
+      /line=\d+,.*double quote: pnpm writes single quotes/,
+    'double-quoted value': /line=\d+,.*double quote: pnpm writes single quotes/,
     'multi-line flow mapping': /line=\d+,.*flow mapping spans lines/,
     'multi-line flow sequence': /line=\d+,.*flow sequence spans lines/,
     'multi-line quoted value': /line=\d+,.*quoted value spans lines/,
@@ -631,7 +640,33 @@ test('verify: rejects lockfile YAML that could hide or move an entry from the li
     'carriage return': ['    hasBin: true\n', '    hasBin: true\r  packages/ui:\n'],
     tab: ['    hasBin: true\n', '    hasBin:\ttrue\n'],
     'Unicode line separator': ['    hasBin: true\n', '    hasBin: true\u2028  x: 1\n'],
+    'double-quoted value spoofing parent keys': [
+      '        specifier: 3.6.2\n        version: 3.6.2\n',
+      [
+        `        '"': "''`,
+        '  packages/ui:',
+        '    dependencies:',
+        "      '@pwp/core':",
+        '          x" # "',
+        '        specifier: workspace:*',
+        '        version: link:../core',
+        '',
+      ].join('\n'),
+    ],
+    'double-quoted value': ['        specifier: 3.6.2\n', '        specifier: "3.6.2"\n'],
     'block scalar': ['    hasBin: true\n', '    note: |\n      text\n'],
+    'block scalar with a comment': [
+      '        specifier: workspace:*\n',
+      '        specifier: |- # c\n          workspace:*\n',
+    ],
+    'block scalar in a sequence with a comment': [
+      '    hasBin: true\n',
+      '    os:\n      - > # c\n        linux\n',
+    ],
+    'nested sequence block scalar': [
+      '    hasBin: true\n',
+      '    os:\n      - - |\n          linux\n',
+    ],
     'document marker': ["lockfileVersion: '9.0'\n", "---\nlockfileVersion: '9.0'\n"],
     'explicit key': ['    hasBin: true\n', '    ? hasBin\n    : true\n'],
   };
