@@ -56,6 +56,10 @@ function misconfigured(message: string): AdapterError {
   return new AdapterError('rateLimit', NAME, 'misconfigured', message);
 }
 
+function invalidInput(message: string): AdapterError {
+  return new AdapterError('rateLimit', NAME, 'invalid_input', message);
+}
+
 export function createMemoryRateLimitStore(
   options: MemoryRateLimitOptions = {},
 ): MemoryRateLimitStore {
@@ -69,17 +73,17 @@ export function createMemoryRateLimitStore(
   }
 
   function decide(key: RateLimitKey, window: RateLimitWindow): RateLimitResult {
-    if (!KEY_RE.test(key)) throw misconfigured('invalid rate-limit key');
+    if (!KEY_RE.test(key)) throw invalidInput('invalid rate-limit key');
     const { limit, windowSeconds } = window;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
-      throw misconfigured('invalid limit');
+      throw invalidInput('invalid limit');
     }
     if (
       !Number.isSafeInteger(windowSeconds) ||
       windowSeconds < 1 ||
       windowSeconds > MAX_WINDOW_SECONDS
     ) {
-      throw misconfigured('invalid window');
+      throw invalidInput('invalid window');
     }
     const t = now();
     const windowMs = windowSeconds * 1000;
@@ -123,7 +127,12 @@ export function createMemoryRateLimitStore(
       try {
         return Promise.resolve(decide(key, window));
       } catch (e) {
-        return Promise.reject(e instanceof Error ? e : misconfigured('rate-limit failure'));
+        if (e instanceof AdapterError) return Promise.reject(e);
+        // Anything else (e.g. a throwing injected clock) becomes a fixed, PII-free error with no
+        // `cause`, so the contract's "rejects only with AdapterError" holds (#142).
+        return Promise.reject(
+          new AdapterError('rateLimit', NAME, 'unavailable', 'rate-limit store failure'),
+        );
       }
     },
   };
