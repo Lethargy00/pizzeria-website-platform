@@ -58,15 +58,47 @@ export function isDependabot(user) {
   );
 }
 
-/** Issue number from the first "Closes/Fixes/Resolves #n" in a PR body. */
+/**
+ * Markdown with fenced code blocks removed (#148). Text inside a fence is an example, not
+ * content, so a fenced "## Touches" or "Closes #n" must never decide the result. A fence opens
+ * with 3 or more backticks or tildes (up to 3 leading spaces; a backtick fence's info string may
+ * not contain a backtick) and closes with the same character, at least as many times, alone on its
+ * line. An unclosed fence runs to the end of the body (fail closed). Removed lines become blank
+ * lines, so the text around a fence stays separated.
+ */
+export function stripFences(text) {
+  const out = [];
+  let fence = null; // { ch, len } while inside a fence
+  for (const line of String(text ?? '').split(/\r\n|\r|\n/)) {
+    if (fence) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      if (close && close[1][0] === fence.ch && close[1].length >= fence.len) fence = null;
+      out.push('');
+      continue;
+    }
+    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
+      fence = { ch: open[1][0], len: open[1].length };
+      out.push('');
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/** Issue number from the first "Closes/Fixes/Resolves #n" in a PR body, outside code fences. */
 export function closedIssue(body) {
-  const m = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/i.exec(body ?? '');
+  const m = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/i.exec(stripFences(body));
   return m ? Number(m[1]) : null;
 }
 
-/** Backticked globs from the "## Touches" section (markdown) or the "### Touches" issue-form section. */
+/**
+ * Backticked globs from the "## Touches" section (markdown) or the "### Touches" issue-form
+ * section, ignoring fenced code blocks (#148).
+ */
 export function parseTouches(body) {
-  const m = /^#{2,3}\s*Touches\s*$([\s\S]*?)(?=^#{2,3}\s|(?![\s\S]))/im.exec(body ?? '');
+  const m = /^#{2,3}\s*Touches\s*$([\s\S]*?)(?=^#{2,3}\s|(?![\s\S]))/im.exec(stripFences(body));
   if (!m) return [];
   return [...m[1].matchAll(/`([^`]+)`/g)].map((x) => x[1].trim()).filter(Boolean);
 }

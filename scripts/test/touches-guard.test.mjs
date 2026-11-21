@@ -2,9 +2,16 @@
 // (the issues API also returns PRs, marked by a `pull_request` key).
 // #150: and only from a trusted issue in this repository (agent:* label, author_association
 // OWNER/MEMBER/COLLABORATOR, no redirects, matching repository_url and number).
+// #148: fenced code blocks (``` and ~~~) never supply a Touches section or a Closes line.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateTouches, fetchIssue } from '../touches-guard.mjs';
+import {
+  closedIssue,
+  evaluateTouches,
+  fetchIssue,
+  parseTouches,
+  stripFences,
+} from '../touches-guard.mjs';
 
 const HUMAN = { login: 'Wetterbro', type: 'User', id: 47597724 };
 const BOT = { login: 'dependabot[bot]', type: 'Bot', id: 49699333 };
@@ -278,4 +285,125 @@ test('Dependabot needs no issue, so the trust checks do not apply to it', async 
     issueBody: () => assert.fail('must not read an issue'),
   });
   assert.equal(r.ok, true, r.lines.join('\n'));
+});
+
+// ---- #148: fenced code blocks never decide the result ----
+
+const REAL = '## Touches\n- `scripts/**`\n';
+
+test('fences: backtick and tilde, any length of 3 or more, up to 3 leading spaces', () => {
+  for (const f of ['```', '````', '`````', '~~~', '~~~~', ' ```', '  ~~~', '   ```']) {
+    assert.deepEqual(parseTouches(`${f}\n## Touches\n- \`**\`\n${f}\n`), [], f);
+    assert.equal(closedIssue(`${f}\nCloses #5\n${f}\n`), null, f);
+    assert.deepEqual(parseTouches(`${f}\n## Touches\n- \`**\`\n${f}\n${REAL}`), ['scripts/**'], f);
+  }
+});
+
+test('a fenced Touches block above the real one is ignored (the #131 reproduction)', () => {
+  const body = 'Example:\n```\n## Touches\n- `**`\n```\n\n' + REAL;
+  assert.deepEqual(parseTouches(body), ['scripts/**']);
+});
+
+test('a fenced heading neither starts nor ends the real Touches section', () => {
+  const body = '## Touches\n- `a/**`\n```\n## Other\n- `b/**`\n```\n- `c/**`\n## Next\n- `d`\n';
+  assert.deepEqual(parseTouches(body), ['a/**', 'c/**']);
+});
+
+test('fail closed: a Touches heading only inside a fence means no Touches section', async () => {
+  const fenced = '```\n## Touches\n- `**`\n```\n';
+  assert.deepEqual(parseTouches(fenced), []);
+  const r = await closes50(issue50({ body: fenced }));
+  assert.equal(r.ok, false);
+  assert.match(r.lines[0], /no Touches globs/);
+});
+
+test('an unclosed fence runs to the end of the body (fail closed)', async () => {
+  assert.deepEqual(parseTouches('```\n' + REAL), []);
+  assert.deepEqual(parseTouches('~~~~\n' + REAL), []);
+  assert.equal(closedIssue('text\n```\nCloses #50\n'), null);
+  // Touches before an unclosed fence still count; those after it do not.
+  assert.deepEqual(parseTouches(REAL + '```\n## Touches\n- `**`\n'), ['scripts/**']);
+  const r = await closes50(issue50({ body: '```\n' + REAL }));
+  assert.equal(r.ok, false);
+  assert.match(r.lines[0], /no Touches globs/);
+});
+
+test('closing fence rules: same character, at least as long, nothing else on the line', () => {
+  const body = (close) => `\`\`\`\`\n${close}\nCloses #7\n`;
+  // Too short, wrong character, or trailing text: the fence stays open.
+  for (const close of ['```', '~~~~', '```` x', '````x']) {
+    assert.equal(closedIssue(body(close)), null, close);
+  }
+  // Same or longer run, optional trailing spaces and up to 3 leading spaces: closed.
+  for (const close of ['````', '`````', '````  ', '   ````']) {
+    assert.equal(closedIssue(body(close)), 7, close);
+  }
+  // A tilde fence is not closed by backticks, and vice versa.
+  assert.equal(closedIssue('~~~\n```\nCloses #7\n'), null);
+  assert.equal(closedIssue('```\n~~~\nCloses #7\n'), null);
+});
+
+test('a longer fence can contain a shorter one', () => {
+  const body = '````\n```\nCloses #5\n```\n````\nCloses #6\n';
+  assert.equal(closedIssue(body), 6);
+});
+
+test('not fences: 4+ leading spaces, fewer than 3 marks, or a backtick in a backtick info string', () => {
+  assert.equal(closedIssue('    ```\nCloses #5\n'), 5);
+  assert.equal(closedIssue('``\nCloses #5\n'), 5);
+  assert.equal(closedIssue('~~\nCloses #5\n'), 5);
+  assert.equal(closedIssue('```js`x`\nCloses #5\n'), 5);
+  // An info string is fine on a backtick or tilde fence.
+  assert.equal(closedIssue('```js\nCloses #5\n```\n'), null);
+  assert.equal(closedIssue('~~~ a`b\nCloses #5\n~~~\n'), null);
+});
+
+test('CRLF and CR line endings are handled', () => {
+  const crlf = '```\r\n## Touches\r\n- `**`\r\n```\r\n## Touches\r\n- `x`\r\n';
+  assert.deepEqual(parseTouches(crlf), ['x']);
+  assert.equal(closedIssue('```\rCloses #5\r```\rCloses #6'), 6);
+});
+
+test('a fenced Closes line is ignored; a real one wins wherever it sits', () => {
+  assert.equal(closedIssue('```\nCloses #5\n```\nCloses #6'), 6);
+  assert.equal(closedIssue('Closes #6\n```\nCloses #5\n```'), 6);
+  assert.equal(closedIssue('```\nCloses #5\n```'), null);
+  assert.equal(closedIssue(null), null);
+  assert.deepEqual(parseTouches(undefined), []);
+});
+
+test('evaluateTouches: a fenced-only Closes fails; fenced wide Touches cannot widen', async () => {
+  const noClose = await run({
+    number: 300,
+    body: '```\nCloses #50\n```',
+    files: ['scripts/a.mjs'],
+  });
+  assert.equal(noClose.ok, false);
+  assert.match(noClose.lines[0], /no "Closes #<issue>"/);
+  const fencedWide = issue50({ body: '```\n## Touches\n- `**`\n```\n' + REAL });
+  const ok = await closes50(fencedWide);
+  assert.equal(ok.ok, true, ok.lines.join('\n'));
+  const out = await run({
+    number: 300,
+    body: 'Closes #50',
+    files: ['package.json'],
+    issueBody: fencedWide,
+  });
+  assert.equal(out.ok, false);
+  assert.match(out.lines[0], /outside the Touches of #50 \(scripts\/\*\*\)/);
+});
+
+test('a fenced Closes cannot redirect the check to another issue', async () => {
+  const r = await run({
+    number: 300,
+    body: '```\nCloses #201\n```\nCloses #50',
+    files: ['package.json'],
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.lines[0], /outside the Touches of #50/);
+});
+
+test('stripFences keeps the line count and non-fence text', () => {
+  assert.equal(stripFences('a\n```\nb\n```\nc'), 'a\n\n\n\nc');
+  assert.equal(stripFences(undefined), '');
 });
