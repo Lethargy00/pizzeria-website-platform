@@ -1,8 +1,16 @@
 name: bootstrap-lockfile
 # Agent sessions can't reach the npm registry (docs/DECISIONS.md #79), so the lockfile
 # is (re)generated here whenever it is missing or out of date with the package.json files.
-# Installs with --ignore-scripts, applies Prettier, commits to main, then dispatches ci and
-# security (pushes made with GITHUB_TOKEN don't trigger workflows; dispatches do).
+#
+# Two jobs, so that no dependency code ever runs next to a write token (#129):
+#   generate  contents: read, no persisted credentials. Runs pnpm install --ignore-scripts and
+#             Prettier (both load code from node_modules and the repo) and uploads the result
+#             as a binary git patch. Treat its output as untrusted.
+#   push      contents: write + actions: write. Runs no repo or dependency code: only checkout,
+#             download-artifact, git and gh. Applies the patch, rejects it unless every changed
+#             path is on the allow-list below, commits, pushes to main, then dispatches ci and
+#             security (pushes made with GITHUB_TOKEN don't trigger workflows; dispatches do).
+# Both jobs only run for refs/heads/main, so dispatching from another branch does nothing.
 on:
   workflow_dispatch:
   push:
@@ -13,15 +21,31 @@ permissions:
 concurrency:
   group: bootstrap-lockfile
   cancel-in-progress: false
+# Allow-list for the patch (checked in the push job, tested in
+# scripts/test/workflow-bootstrap-lockfile.test.mjs):
+#   - pnpm-lock.yaml may be added or modified (regular file, mode 100644);
+#   - any other path may only be MODIFIED (no add/delete/rename/mode change, mode 100644 on
+#     both sides), must match FORMAT_PATHS (extensions Prettier formats here) and must NOT
+#     match PROTECTED_PATHS: dot paths, scripts, tenants, e2e, manifests and tool config, and
+#     every path that needs architect, dependency, security or richtext review in
+#     scripts/review-gate.mjs (the test checks each tracked file and one sample per matrix glob,
+#     so a new matrix path that this regex misses fails CI). A formatting change to a protected
+#     file fails the run: format it in a reviewed PR instead (ci runs format:check on PRs).
+env:
+  FORMAT_PATHS: '\.(md|mdx|json|jsonc|json5|yaml|yml|css|scss|html|astro|js|mjs|cjs|jsx|ts|mts|cts|tsx)$'
+  PROTECTED_PATHS: '(^|/)\.|^(scripts|tenants|e2e)/|^packages/(cli|functions|adapters|schema)/|^packages/core/src/richtext/|^packages/[^/]+/src/contracts/|(^|/)(package\.(json|yaml|json5)|pnpm-workspace\.yaml|turbo\.json|tsconfig[^/]*\.json|[^/]*\.config\.[^/]*)$|^(AGENTS|PROMPT|SECURITY)\.md$|^docs/(SECURITY|THREAT-MODEL|DECISIONS|DEPENDENCIES)\.md$|^docs/adr/|[Ss]anitiz|[Cc]sp|/headers/|Form'
 jobs:
-  lockfile:
+  generate:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write
-      actions: write
+      contents: read
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc }
@@ -36,18 +60,72 @@ jobs:
       - if: steps.check.outputs.stale == 'true'
         run: |
           set -o pipefail
-          pnpm install --no-frozen-lockfile --ignore-scripts 2>&1 | tee install.log || { tail -n 25 install.log | sed 's/^/::error title=pnpm install::/'; exit 1; }
-          pnpm format 2>&1 | tee format.log || { tail -n 25 format.log | sed 's/^/::error title=prettier::/'; exit 1; }
-          rm -f install.log format.log
-      - if: steps.check.outputs.stale == 'true'
+          pnpm install --no-frozen-lockfile --ignore-scripts 2>&1 | tee "$RUNNER_TEMP/install.log" || { tail -n 25 "$RUNNER_TEMP/install.log" | sed 's/^/::error title=pnpm install::/'; exit 1; }
+          pnpm format 2>&1 | tee "$RUNNER_TEMP/format.log" || { tail -n 25 "$RUNNER_TEMP/format.log" | sed 's/^/::error title=prettier::/'; exit 1; }
+      - id: patch
+        if: steps.check.outputs.stale == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/bootstrap-patch"
+          git add -A
+          git diff --cached --binary --no-renames HEAD > "$RUNNER_TEMP/bootstrap-patch/bootstrap.patch"
+          if [ -s "$RUNNER_TEMP/bootstrap-patch/bootstrap.patch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing to commit"
+          fi
+      - if: steps.patch.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-patch
+          path: ${{ runner.temp }}/bootstrap-patch/bootstrap.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  push:
+    needs: generate
+    if: github.ref == 'refs/heads/main' && needs.generate.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.sha }}', persist-credentials: false }
+      - uses: actions/download-artifact@v4
+        with:
+          name: bootstrap-patch
+          path: ${{ runner.temp }}/bootstrap-patch
+      # Only git and bash from here on. The patch comes from a job that ran dependency code, so
+      # git applies it (git refuses paths outside the work tree, inside .git or behind symlinks)
+      # and the RESULT in the index is checked, not what the patch claims.
+      - id: verify
         env:
+          PATCH: ${{ runner.temp }}/bootstrap-patch/bootstrap.patch
+        run: |
+          set -euo pipefail
+          size=$(stat -c %s "$PATCH")
+          if [ "$size" -gt 52428800 ]; then echo "::error title=bootstrap-lockfile::patch is larger than 50 MB ($size bytes)"; exit 1; fi
+          git apply --index --binary --whitespace=nowarn "$PATCH" || { echo "::error title=bootstrap-lockfile::patch does not apply to $(git rev-parse HEAD)"; exit 1; }
+          bad=0
+          while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+            read -r omode nmode _ _ status <<< "${meta#:}"
+            if [ "$path" = pnpm-lock.yaml ] && [ "$nmode" = 100644 ] && { [ "$status" = M ] && [ "$omode" = 100644 ] || [ "$status" = A ]; }; then continue; fi
+            if [ "$status" = M ] && [ "$omode" = 100644 ] && [ "$nmode" = 100644 ] && [[ "$path" =~ $FORMAT_PATHS ]] && ! [[ "$path" =~ $PROTECTED_PATHS ]]; then continue; fi
+            printf '::error title=bootstrap-lockfile::path outside the allow-list (status %s, mode %s -> %s): %q\n' "$status" "$omode" "$nmode" "$path"
+            bad=1
+          done < <(git diff --cached --raw -z --no-renames --no-abbrev HEAD)
+          if [ "$bad" != 0 ]; then echo "::error title=bootstrap-lockfile::patch rejected. Fix these files in a reviewed PR, then re-run."; exit 1; fi
+          git diff --cached --stat HEAD
+      - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
-          git commit -m "chore: regenerate pnpm-lock.yaml and apply prettier" -m "Agent: bootstrap-lockfile workflow"
-          git push
+          if git diff --cached --quiet HEAD; then echo "nothing to commit"; exit 0; fi
+          git -c core.hooksPath=/dev/null commit -m "chore: regenerate pnpm-lock.yaml and apply prettier" -m "Agent: bootstrap-lockfile workflow"
+          # The token is only used here, on the command line, never written to .git/config.
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/main
           gh workflow run ci.yml --ref main
           gh workflow run security.yml --ref main
