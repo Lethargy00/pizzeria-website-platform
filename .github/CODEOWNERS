@@ -76,3 +76,8 @@
 /scripts/check-html-sinks.mjs       @Lethargy00  # platform + security review (ADR 0002 (b), (d), #80)
 /scripts/test/richtext-*            @Lethargy00  # platform + security review (fixtures for (a))
 /scripts/test/*html-sink*           @Lethargy00  # platform + security review (fixtures for (b), (d))
+
+# Install-time code and the license gate (#128): run during install or judge dependencies.
+/.pnpmfile.cjs                      @Lethargy00  # security (install hook, runs on every pnpm install)
+/.pnpmfile.mjs                      @Lethargy00  # security (install hook, runs on every pnpm install)
+/scripts/check-licenses.mjs         @Lethargy00  # security (license gate)
