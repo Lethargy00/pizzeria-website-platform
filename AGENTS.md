@@ -238,17 +238,19 @@ The `review-gate` CI job reads a PR's changed paths and labels, compares them wi
   - `scripts/check-html-sinks.mjs` (the ADR 0002 (b) and (d) HTML-sink check)
   - `scripts/test/richtext-*` and `scripts/test/*html-sink*` (the fixtures that prove those checks)
 
-**Security-reviewed paths in CODEOWNERS.** The last section of `.github/CODEOWNERS` marks these paths as security-reviewed. It sits last because CODEOWNERS uses the last matching pattern, so it overrides the broader role entries above it:
+**Security-reviewed paths in CODEOWNERS.** `.github/CODEOWNERS` marks these paths as security-reviewed with a "security" note. CODEOWNERS uses the last matching pattern, so a line is only as good as the last line that matches its path. The test described below checks this for every path, so no later line overrides a security note. The paths sit in different places in the file:
 
-- the workflows: `/.github/workflows/` and `/.github/CODEOWNERS`
-- the gate scripts: `/scripts/review-gate.mjs`, `/scripts/touches-guard.mjs`, every `/scripts/*-guard.mjs`, and `/scripts/lib/`, which the gates share
-- the rich-text paths in the `richtext` row above
-- the dependency paths: `/pnpm-lock.yaml`, `/package.json`, `/playground/package.json`, `/pnpm-workspace.yaml`, `/.npmrc`, `/.pnpmfile.cjs`, `/.pnpmfile.mjs`, the alternate manifests (`package.yaml` and `package.json5` at the root, in `/playground/` and in `/packages/*/`), and `/packages/*/package.json` (the `DEPENDENCY_PATHS`, `ALT_MANIFESTS` and `PACKAGE_MANIFESTS` constants in `scripts/review-gate.mjs`)
-- the other code paths in the `security` row: the form, sanitizer, CSP and headers paths, `/packages/cli/src/build/`, `/packages/cli/src/isolation/` and `**/.env.example`
+- the workflows: `/.github/workflows/` and `/.github/CODEOWNERS` (the last section)
+- the gate scripts: `/scripts/review-gate.mjs`, `/scripts/touches-guard.mjs`, every `/scripts/*-guard.mjs`, and `/scripts/lib/`, which the gates share (the last section)
+- the rich-text paths in the `richtext` row above (the last section)
+- `/scripts/check-licenses.mjs` and the root pnpmfiles `/.pnpmfile.cjs` and `/.pnpmfile.mjs` (the last section)
+- `/SECURITY.md`, `/docs/SECURITY.md`, `/docs/THREAT-MODEL.md`, `/packages/functions/` and `/packages/adapters/` (their role entries, whose notes say security)
+- the dependency paths: `/pnpm-lock.yaml`, `/package.json`, `/pnpm-workspace.yaml` and `/.npmrc` (in the platform block at the top), and `/playground/package.json`, `/packages/*/package.json` and the alternate manifests `package.yaml` and `package.json5` at the root, in `/playground/` and in `/packages/*/` (in the dependency-manifests block, above the "Kept LAST" header). They are the `DEPENDENCY_PATHS`, `ALT_MANIFESTS` and `PACKAGE_MANIFESTS` constants in `scripts/review-gate.mjs`
+- the remaining code paths in the `security` row: the form, sanitizer, CSP and headers paths, `/packages/cli/src/build/`, `/packages/cli/src/isolation/` and `**/.env.example` (the last section)
 
-`scripts/test/review-gate-richtext.test.mjs` imports those constants and fails if any dependency path or `security`-row glob resolves to a CODEOWNERS line without a security note, or if an owner is anything but `@Lethargy00`.
+This list may not be complete. The source of truth is `scripts/test/review-gate-richtext.test.mjs`. It imports those constants and the `security` row of the matrix, and fails if any dependency path or `security`-row glob resolves to a CODEOWNERS line without a security note, or if the owners on any line are anything but exactly `@Lethargy00`.
 
-Every CODEOWNERS entry currently maps to the one shared GitHub account, so the comment after each entry, not the account, says which role must review. The CODEOWNERS section is wider than the `security` row in one way: it also marks the `richtext` row paths, which `review-gate` enforces through the `richtext` row instead.
+Every CODEOWNERS entry currently maps to the one shared GitHub account, so the comment after each entry, not the account, says which role must review. The CODEOWNERS notes are wider than the `security` row in two ways: they also mark the `richtext` row paths, which `review-gate` enforces through the `richtext` row, and the dependency paths, which it enforces through the `dependency` row (`approved:architect` and `approved:security`).
 
 ## 11. Comment formats (copy exactly)
 

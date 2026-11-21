@@ -89,11 +89,13 @@ const entries = CODEOWNERS.split('\n')
   .map((l) => l.trim())
   .filter((l) => l && !l.startsWith('#'))
   .map((l) => {
-    const [pattern, ...rest] = l.split(/\s+/);
+    // Split at the first # so only what precedes it counts as pattern and owners. Every token
+    // after the pattern is an owner (a user, a team or an email), so an extra one is caught.
     const hash = l.indexOf('#');
+    const [pattern, ...owners] = (hash === -1 ? l : l.slice(0, hash)).trim().split(/\s+/);
     return {
       re: globToRegExp(pattern),
-      owners: rest.filter((t) => t.startsWith('@')),
+      owners,
       note: hash === -1 ? '' : l.slice(hash + 1),
     };
   });
