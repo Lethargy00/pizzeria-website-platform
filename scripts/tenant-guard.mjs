@@ -46,27 +46,168 @@ const ASSETS_PATH = /^[^/]+\/assets\/.+/;
 const TEXT_EXT = new Set(['.yaml', '.yml', '.md']);
 const MAX_TEXT_BYTES = 1_000_000;
 
+// Character references a browser or remark-parse decodes inside a URL or attribute. Named ones are
+// matched case-insensitively (fail closed: "&COLON;" is not a real entity, but treating it as one
+// costs nothing). Unknown names are left as they are.
+const NAMED_REFS = {
+  colon: ':',
+  tab: '\t',
+  newline: '\n',
+  sol: '/',
+  lpar: '(',
+  rpar: ')',
+  equals: '=',
+  quot: '"',
+  apos: "'",
+  lt: '<',
+  gt: '>',
+  amp: '&',
+  nbsp: '\u00a0',
+};
+// HTML character references (";" is optional, as in browsers' legacy parsing) and backslash
+// escapes: YAML double-quoted escapes (\xXX, \uXXXX, \UXXXXXXXX, \t, an escaped line break) and
+// Markdown backslash-escaped punctuation ("javascript\:" is a javascript: link destination).
+const ESCAPE =
+  /&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]*));?|\\(?:[xX]([0-9a-fA-F]{2})|U([0-9a-fA-F]{8})|u([0-9a-fA-F]{4})|(\r?\n[ \t]*)|([\s\S]))/g;
+const YAML_ESCAPES = {
+  0: '\0',
+  a: '\x07',
+  b: '\b',
+  t: '\t',
+  n: '\n',
+  v: '\v',
+  f: '\f',
+  r: '\r',
+  e: '\x1b',
+  N: '\x85',
+  _: '\xa0',
+  L: '\u2028',
+  P: '\u2029',
+};
+// Removed before the decoded check: browsers drop tab, LF and CR anywhere in a URL and leading C0
+// controls; we also drop every other control and invisible format character (fail closed).
+// eslint-disable-next-line no-control-regex -- matching control characters is the point here
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]/;
+const DECODE_ROUNDS = 3;
+
+function fromCodePoint(n) {
+  return Number.isSafeInteger(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '\ufffd';
+}
+
+// Only the escapes a YAML double-quoted scalar decodes. "\<" is not one of them, and HTML
+// character references are left alone, so "&lt;" stays the way to write a literal "<".
+const YAML_ESCAPE =
+  /\\(?:[xX]([0-9a-fA-F]{2})|U([0-9a-fA-F]{8})|u([0-9a-fA-F]{4})|(\r?\n[ \t]*)|([0abtnvfreN_LP "/\\\t]))/g;
+
+/** One decoding pass over `view` with `re`; `replace(m)` returns the text for a match or undefined. */
+function decodeRound(view, re, replace) {
+  const { text: s, map } = view;
+  let out = '';
+  const outMap = [];
+  let last = 0;
+  for (const m of s.matchAll(re)) {
+    const rep = replace(m);
+    if (rep === undefined) continue;
+    out += s.slice(last, m.index);
+    for (let i = last; i < m.index; i++) outMap.push(map[i]);
+    out += rep;
+    for (let i = 0; i < rep.length; i++) outMap.push(map[m.index]);
+    last = m.index + m[0].length;
+  }
+  if (last === 0) return view;
+  out += s.slice(last);
+  for (let i = last; i < s.length; i++) outMap.push(map[i]);
+  return { text: out, map: outMap };
+}
+
+const hex = (h) => fromCodePoint(parseInt(h, 16));
+
+/**
+ * Returns three views of `text`, each with, for each of its UTF-16 units, the index in `text` it
+ * came from (`map`), so a match is reported on the right line:
+ * - `yaml`: only YAML double-quoted escapes decoded (one pass, as the YAML parser does), so
+ *   "\x3ciframe\x3e" in a YAML string is seen as the tag it becomes;
+ * - `decoded`: HTML character references, YAML escapes and Markdown backslash escapes decoded, up
+ *   to DECODE_ROUNDS rounds, so "&amp;#58;" also becomes ":";
+ * - `stripped`: `decoded` without control and invisible characters (a tab or newline inside a URL
+ *   scheme is ignored by browsers, but a tab between attributes is a separator, so both are kept).
+ */
+export function normalizeForScan(text) {
+  const raw = { text, map: Array.from({ length: text.length }, (_, i) => i) };
+  const yaml = decodeRound(raw, YAML_ESCAPE, (m) =>
+    (m[1] ?? m[2] ?? m[3])
+      ? hex(m[1] ?? m[2] ?? m[3])
+      : m[4] !== undefined
+        ? '' // escaped line break: joined, indent dropped
+        : (YAML_ESCAPES[m[5]] ?? m[5]),
+  );
+  let decoded = raw;
+  for (let round = 0; round < DECODE_ROUNDS; round++) {
+    const next = decodeRound(decoded, ESCAPE, (m) => {
+      if (m[1] !== undefined) return fromCodePoint(Number(m[1]));
+      if (m[2] !== undefined) return hex(m[2]);
+      if (m[3] !== undefined) return NAMED_REFS[m[3].toLowerCase()];
+      if (m[4] ?? m[5] ?? m[6]) return hex(m[4] ?? m[5] ?? m[6]);
+      if (m[7] !== undefined) return ''; // YAML escaped line break
+      return YAML_ESCAPES[m[8]] ?? m[8];
+    });
+    if (next === decoded) break;
+    decoded = next;
+  }
+  let out = '';
+  const outMap = [];
+  for (let i = 0; i < decoded.text.length; i++) {
+    if (INVISIBLE.test(decoded.text[i])) continue;
+    out += decoded.text[i];
+    outMap.push(decoded.map[i]);
+  }
+  return { yaml, decoded, stripped: { text: out, map: outMap } };
+}
+
+// A CommonMark autolink is never raw HTML, so these are the only "<" + letter forms allowed:
+// <https:…>, <mailto:…>, <tel:…> (no whitespace, "<" or ">" inside) and <name@example.com>.
+// The email local part is narrower than CommonMark's on purpose ("/" and "=" are left out).
+const AUTOLINK = String.raw`(?:https|mailto|tel):[^\s<>]*>|[a-z0-9._%+-]+@[a-z0-9.-]+>`;
+
 // Content rules for YAML/Markdown. Tenants refer to platform components by name only.
+// ADR 0002 allows no raw HTML in tenant Markdown, so any tag fails (`html-tag`). The narrower HTML
+// rules stay as defence in depth with a more specific message. Every rule runs on the raw text;
+// `views` names the normalizeForScan views it also runs on, which catch YAML-escaped,
+// entity-encoded and control-character-split payloads.
+const HTML_VIEWS = ['yaml'];
+const ALL_VIEWS = ['yaml', 'decoded', 'stripped'];
 export const CONTENT_RULES = [
+  {
+    id: 'html-tag',
+    re: new RegExp(String.raw`<(?!${AUTOLINK})[a-z!/?]`, 'i'),
+    views: HTML_VIEWS,
+    msg: 'Raw HTML (tags, comments, <!…> or <?…>) is not allowed in tenant content (ADR 0002), also not inside code spans or written with YAML escapes such as "\\x3c". Use Markdown or a platform section type. Allowed: the autolinks <https://…>, <mailto:…>, <tel:…> and <name@example.com>. To show a literal "<", write "&lt;" or put a space after it.',
+  },
   {
     id: 'html-script',
     re: /<\s*script\b/i,
+    views: HTML_VIEWS,
     msg: 'HTML <script> tags are not allowed in tenant content.',
   },
   {
     id: 'html-embed',
-    re: /<\s*(iframe|object|embed|link|style|meta|base|form)\b/i,
+    re: /<\s*(iframe|object|embed|link|style|meta|base|form|svg|math)\b/i,
+    views: HTML_VIEWS,
     msg: 'Raw HTML embeds are not allowed. Use a platform section type instead.',
   },
   {
+    // Only inside a tag ("<" + letter), so prose such as "Varje onsdag = pizzadag" passes. The
+    // bound keeps it linear; a longer tag still fails html-tag.
     id: 'event-handler',
-    re: /\son[a-z]+\s*=\s*["']/i,
-    msg: 'Inline event handlers (onclick=…) are not allowed.',
+    re: /<[a-z][^<>]{0,2000}?[\s/"']on[a-z]+\s*=/i,
+    views: ALL_VIEWS,
+    msg: 'Inline event handlers (<img onerror=…>, <a onclick=…>) are not allowed, also not when the tag is written with character references or YAML escapes.',
   },
   {
     id: 'js-url',
-    re: /\b(javascript|vbscript|data)\s*:/i,
-    msg: 'javascript:, vbscript: and data: URLs are not allowed. Allowed schemes: https:, mailto:, tel:.',
+    re: /(?<![a-z0-9+.-])(javascript|vbscript|data)\s*:/i,
+    views: ALL_VIEWS,
+    msg: 'javascript:, vbscript: and data: URLs are not allowed, also not when written with character references (&#58;, &colon;, &#x61;) or split by tabs, newlines or invisible characters. Allowed schemes: https:, mailto:, tel:.',
   },
   {
     id: 'insecure-url',
@@ -89,6 +230,25 @@ export const CONTENT_RULES = [
     msg: 'Tenant files may not import or export modules.',
   },
 ];
+
+/**
+ * Index in `text` of the first match of `rule`, or -1. The rule is tested on the raw text and on
+ * each of its `views` from normalizeForScan, and the earliest source position wins.
+ */
+export function findRule(rule, text, normalized = rule.views ? normalizeForScan(text) : null) {
+  const raw = rule.re.exec(text);
+  let pos = raw ? raw.index : -1;
+  if (rule.views && normalized) {
+    for (const name of rule.views) {
+      const view = normalized[name];
+      const m = rule.re.exec(view.text);
+      if (!m) continue;
+      const src = view.map[m.index];
+      if (pos === -1 || src < pos) pos = src;
+    }
+  }
+  return pos;
+}
 
 /**
  * Escapes control characters (JSON style) so a file name or file content can never add lines to the
@@ -185,10 +345,11 @@ export function checkTenants(root) {
       }
       const text = readFileSync(e.full, 'utf8');
       const lines = text.split('\n');
+      const normalized = normalizeForScan(text);
       for (const rule of CONTENT_RULES) {
-        const m = rule.re.exec(text);
-        if (m) {
-          const line = text.slice(0, m.index).split('\n').length;
+        const pos = findRule(rule, text, normalized);
+        if (pos !== -1) {
+          const line = text.slice(0, pos).split('\n').length;
           problems.push({
             path: `${at}:${line}`,
             rule: rule.id,

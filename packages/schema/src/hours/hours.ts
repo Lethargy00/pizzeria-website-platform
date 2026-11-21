@@ -3,9 +3,11 @@ import {
   IsoDate,
   Slug,
   TimeOfDay,
+  WEEKDAYS,
   localizedStringFor,
   strictObject,
   type LocaleContext,
+  type Weekday,
 } from '../primitives/index.js';
 
 /**
@@ -13,21 +15,6 @@ import {
  * `hours.yaml` has no time-zone key, and `strictObject` rejects one as an unknown key.
  */
 export const HOURS_TIME_ZONE = 'Europe/Stockholm' as const;
-
-/**
- * The weekdays, in ISO order (Monday first). These are the keys of a weekly schedule.
- * `WEEKDAYS[(jsDay + 6) % 7]` maps a JavaScript `getDay()` value (0 = Sunday) to its key.
- */
-export const WEEKDAYS = [
-  'monday',
-  'tuesday',
-  'wednesday',
-  'thursday',
-  'friday',
-  'saturday',
-  'sunday',
-] as const;
-export type Weekday = (typeof WEEKDAYS)[number];
 
 /**
  * The ids of the Swedish holiday calendar: the values tenants write as `holiday:` in

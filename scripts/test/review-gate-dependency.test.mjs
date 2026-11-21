@@ -314,6 +314,7 @@ for (const f of [
   'scripts/touches-guard.mjs',
   'scripts/new-guard.mjs',
   'scripts/review-gate.mjs',
+  'scripts/check-licenses.mjs', // the license gate in security.yml (#128)
 ]) {
   test(`security row: ${f} needs approved:security`, () => {
     assert.deepEqual(missing([f], ['approved:peer']), ['approved:security']);
@@ -322,7 +323,7 @@ for (const f of [
 }
 
 for (const f of [
-  'scripts/check-licenses.mjs',
+  'scripts/check-example.mjs', // #128 added only check-licenses.mjs, not scripts/check-*.mjs
   'scripts/typecheck.mjs',
   'scripts/test/guards.test.mjs',
   'scripts/guard-notes.md',

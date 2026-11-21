@@ -124,19 +124,92 @@ describe('memory-rate-limit', () => {
     expect((await s.hit(key('a', 1), w)).allowed).toBe(false);
   });
 
-  it('rejects raw identifiers and bad windows as misconfigured', async () => {
+  it('rejects raw identifiers and bad windows as invalid_input', async () => {
     const s = createMemoryRateLimitStore();
     const raw = '203.0.113.7' as RateLimitKey;
     await expect(s.hit(raw, W)).rejects.toBeInstanceOf(AdapterError);
-    await expect(s.hit(raw, W)).rejects.toMatchObject({ code: 'misconfigured' });
+    await expect(s.hit(raw, W)).rejects.toMatchObject({ code: 'invalid_input' });
     await expect(s.hit(key('a'), { limit: 0, windowSeconds: 60 })).rejects.toMatchObject({
-      code: 'misconfigured',
+      code: 'invalid_input',
     });
     await expect(s.hit(key('a'), { limit: 1, windowSeconds: 1.5 })).rejects.toMatchObject({
-      code: 'misconfigured',
+      code: 'invalid_input',
     });
     await expect(s.hit(key('a'), { limit: 1, windowSeconds: 0 })).rejects.toMatchObject({
-      code: 'misconfigured',
+      code: 'invalid_input',
+    });
+    await expect(s.hit(key('a'), { limit: 1.5, windowSeconds: 60 })).rejects.toMatchObject({
+      code: 'invalid_input',
+    });
+    await expect(s.hit(key('a'), { limit: -1, windowSeconds: 60 })).rejects.toMatchObject({
+      code: 'invalid_input',
+    });
+    await expect(s.hit(key('a'), { limit: Number.NaN, windowSeconds: 60 })).rejects.toMatchObject({
+      code: 'invalid_input',
+    });
+    await expect(s.hit(key('a'), { limit: 1, windowSeconds: 86_401 })).rejects.toMatchObject({
+      code: 'invalid_input',
+    });
+    await expect(s.hit(key('a'), { limit: 1, windowSeconds: -60 })).rejects.toMatchObject({
+      code: 'invalid_input',
+    });
+    // bad input records nothing
+    expect(s.size).toBe(0);
+  });
+
+  it('bad input rejects with a non-retryable AdapterError (#142)', async () => {
+    const s = createMemoryRateLimitStore();
+    const e: unknown = await s.hit('bad' as RateLimitKey, W).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(AdapterError);
+    expect(e).toMatchObject({ code: 'invalid_input', retryable: false, kind: 'rateLimit' });
+  });
+
+  it('a bad maxKeys at construction stays misconfigured (#142)', () => {
+    for (const maxKeys of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      let caught: unknown;
+      try {
+        createMemoryRateLimitStore({ maxKeys });
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(AdapterError);
+      expect(caught).toMatchObject({ code: 'misconfigured' });
+    }
+  });
+
+  it('wraps an Error thrown by now() as unavailable with no cause (#142)', async () => {
+    const secret = 'clock broke for 203.0.113.7';
+    const s = createMemoryRateLimitStore({
+      now: () => {
+        throw new RangeError(secret);
+      },
+    });
+    const e: unknown = await s.hit(key('a'), W).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(AdapterError);
+    expect(e).not.toBeInstanceOf(RangeError);
+    expect(e).toMatchObject({ code: 'unavailable', kind: 'rateLimit' });
+    expect((e as Error).cause).toBeUndefined();
+    expect((e as Error).message).not.toContain('203.0.113.7');
+  });
+
+  it('wraps a non-Error thrown by now() as unavailable with no cause (#142)', async () => {
+    const s = createMemoryRateLimitStore({
+      now: () => {
+        throw 'boom';
+      },
+    });
+    const e: unknown = await s.hit(key('a'), W).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(AdapterError);
+    expect(e).toMatchObject({ code: 'unavailable' });
+    expect((e as Error).cause).toBeUndefined();
+  });
+
+  it('passes its own AdapterError through unchanged (#142)', async () => {
+    const s = createMemoryRateLimitStore({ maxKeys: 1 });
+    await s.hit(key('a', 1), W);
+    await expect(s.hit(key('a', 2), W)).rejects.toMatchObject({
+      code: 'unavailable',
+      message: 'rate-limit store is full',
     });
   });
 
@@ -144,19 +217,19 @@ describe('memory-rate-limit', () => {
     const s = createMemoryRateLimitStore();
     await expect(
       s.hit(key('a'), { limit: MAX_LIMIT + 1, windowSeconds: 60 }),
-    ).rejects.toMatchObject({ code: 'misconfigured' });
+    ).rejects.toMatchObject({ code: 'invalid_input' });
     await expect(
       s.hit(key('a'), { limit: Number.MAX_SAFE_INTEGER, windowSeconds: 60 }),
-    ).rejects.toMatchObject({ code: 'misconfigured' });
+    ).rejects.toMatchObject({ code: 'invalid_input' });
     expect((await s.hit(key('a'), { limit: MAX_LIMIT, windowSeconds: 60 })).allowed).toBe(true);
   });
 
   it('rejects over-long keys (#100)', async () => {
     const s = createMemoryRateLimitStore();
     const long = `a:${'0'.repeat(129)}` as RateLimitKey;
-    await expect(s.hit(long, W)).rejects.toMatchObject({ code: 'misconfigured' });
+    await expect(s.hit(long, W)).rejects.toMatchObject({ code: 'invalid_input' });
     const longScope = `${'a'.repeat(33)}:${'0'.repeat(64)}` as RateLimitKey;
-    await expect(s.hit(longScope, W)).rejects.toMatchObject({ code: 'misconfigured' });
+    await expect(s.hit(longScope, W)).rejects.toMatchObject({ code: 'invalid_input' });
   });
 
   it('error messages never echo the key', async () => {

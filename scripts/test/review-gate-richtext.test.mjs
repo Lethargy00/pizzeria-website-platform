@@ -43,7 +43,7 @@ const cases = [
   [['packages/core/src/richtext.md'], ['approved:peer'], []],
   [['packages/core/README.md'], ['approved:peer'], []],
   [['scripts/test/guards.test.mjs'], ['approved:peer'], []],
-  [['scripts/check-licenses.mjs'], ['approved:peer'], []],
+  [['scripts/check-licenses.mjs'], ['approved:peer'], ['approved:security']], // #128
 ];
 
 for (const [files, labels, want] of cases) {
@@ -111,6 +111,10 @@ const mustBeSecurityReviewed = [
   'scripts/tenant-guard.mjs',
   'scripts/lib/glob.mjs',
   'scripts/lib/fs-walk.mjs',
+  // #128: install-time hooks and the license gate
+  '.pnpmfile.cjs',
+  '.pnpmfile.mjs',
+  'scripts/check-licenses.mjs',
 ];
 
 for (const path of mustBeSecurityReviewed) {
@@ -124,5 +128,5 @@ for (const path of mustBeSecurityReviewed) {
 
 test('CODEOWNERS: the rest of @pwp/core and ordinary scripts are not marked for security', () => {
   assert.doesNotMatch(ownerOf('packages/core/src/index.ts').note, /security/);
-  assert.doesNotMatch(ownerOf('scripts/check-licenses.mjs').note, /security/);
+  assert.doesNotMatch(ownerOf('scripts/typecheck.mjs').note, /security/);
 });
