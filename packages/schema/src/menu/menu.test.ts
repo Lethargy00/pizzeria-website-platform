@@ -71,8 +71,22 @@ describe('menuSchema: output', () => {
 
 describe('enums', () => {
   it('lists exactly the 14 EU allergens', () => {
-    expect(ALLERGENS).toHaveLength(14);
-    expect(new Set(ALLERGENS).size).toBe(14);
+    expect(ALLERGENS).toEqual([
+      'gluten',
+      'crustaceans',
+      'eggs',
+      'fish',
+      'peanuts',
+      'soy',
+      'milk',
+      'nuts',
+      'celery',
+      'mustard',
+      'sesame',
+      'sulphites',
+      'lupin',
+      'molluscs',
+    ]);
   });
 
   it('has the dietary tags and weekdays of the contract', () => {
@@ -178,5 +192,126 @@ describe('public surface', () => {
         'specialSchema',
       ].sort(),
     );
+  });
+});
+
+/** The `[code, path]` of every issue, in order. */
+function issuesOf(input: unknown): [string, PropertyKey[]][] {
+  return (schema.safeParse(input).error?.issues ?? []).map((i) => [i.code, i.path]);
+}
+
+describe('one issue per mistake (no follow-up issue for a value a primitive rejected)', () => {
+  const name = { sv: 'X', en: 'X' };
+  const bad = 'Bad Id';
+
+  it('a repeated invalid item id gives only the format issue for each id', () => {
+    const input = {
+      categories: [
+        {
+          id: 'pizzor',
+          name,
+          items: [
+            { id: bad, name, price: 1 },
+            { id: bad, name, price: 1 },
+          ],
+        },
+      ],
+    };
+    expect(issuesOf(input)).toEqual([
+      ['invalid_format', ['categories', 0, 'items', 0, 'id']],
+      ['invalid_format', ['categories', 0, 'items', 1, 'id']],
+    ]);
+  });
+
+  it('a repeated invalid category id gives only the format issues', () => {
+    const category = { id: bad, name, items: [{ id: 'a', name, price: 1 }] };
+    const input = { categories: [category, { ...category, items: [{ id: 'b', name, price: 1 }] }] };
+    expect(issuesOf(input)).toEqual([
+      ['invalid_format', ['categories', 0, 'id']],
+      ['invalid_format', ['categories', 1, 'id']],
+    ]);
+  });
+
+  it('a repeated invalid size or extra id gives only the format issues', () => {
+    const sizes = withItem({
+      price: undefined,
+      sizes: [
+        { id: bad, name, price: 1 },
+        { id: bad, name, price: 2 },
+      ],
+    });
+    expect(issuesOf(sizes)).toEqual([
+      ['invalid_format', ['categories', 0, 'items', 0, 'sizes', 0, 'id']],
+      ['invalid_format', ['categories', 0, 'items', 0, 'sizes', 1, 'id']],
+    ]);
+    const extras = withItem({
+      extras: [
+        { id: bad, name, price: 1 },
+        { id: bad, name, price: 2 },
+      ],
+    });
+    expect(issuesOf(extras)).toEqual([
+      ['invalid_format', ['categories', 0, 'items', 0, 'extras', 0, 'id']],
+      ['invalid_format', ['categories', 0, 'items', 0, 'extras', 1, 'id']],
+    ]);
+  });
+
+  it('a repeated invalid date gives only the format issues', () => {
+    const input = {
+      ...minimalMenu,
+      specials: [{ id: 'jul', name, price: 1, dates: ['2026-02-30', '2026-02-30'] }],
+    };
+    expect(issuesOf(input)).toEqual([
+      ['invalid_format', ['specials', 0, 'dates', 0]],
+      ['invalid_format', ['specials', 0, 'dates', 1]],
+    ]);
+  });
+
+  it('a repeated invalid allergen gives only the enum issues', () => {
+    expect(issuesOf(withItem({ allergens: ['tomato', 'tomato'] }))).toEqual([
+      ['invalid_value', ['categories', 0, 'items', 0, 'allergens', 0]],
+      ['invalid_value', ['categories', 0, 'items', 0, 'allergens', 1]],
+    ]);
+  });
+
+  it('a valid repeated id still gives exactly one duplicate issue', () => {
+    const input = {
+      categories: [
+        {
+          id: 'pizzor',
+          name,
+          items: [
+            { id: 'a', name, price: 1 },
+            { id: 'a', name, price: 1 },
+          ],
+        },
+      ],
+    };
+    expect(issuesOf(input)).toEqual([['custom', ['categories', 0, 'items', 1, 'id']]]);
+  });
+
+  it('lunch start 25:00 gives exactly one issue, not also "end after start"', () => {
+    const input = { ...minimalMenu, lunch: { ...realisticMenu.lunch, start: '25:00' } };
+    expect(issuesOf(input)).toEqual([['invalid_format', ['lunch', 'start']]]);
+  });
+
+  it('lunch end 2pm gives exactly one issue', () => {
+    const input = { ...minimalMenu, lunch: { ...realisticMenu.lunch, end: '2pm' } };
+    expect(issuesOf(input)).toEqual([['invalid_format', ['lunch', 'end']]]);
+  });
+
+  it('an override keyed by an invalid item id gives only the key issue', () => {
+    const input = { ...minimalMenu, overrides: { sodermalm: { items: { [bad]: { price: 1 } } } } };
+    expect(issuesOf(input)).toEqual([['invalid_key', ['overrides', 'sodermalm', 'items', bad]]]);
+  });
+
+  it('an override of an invalid size id gives only the key issue', () => {
+    const input = {
+      ...realisticMenu,
+      overrides: { sodermalm: { items: { margherita: { sizes: { [bad]: 1 } } } } },
+    };
+    expect(issuesOf(input)).toEqual([
+      ['invalid_key', ['overrides', 'sodermalm', 'items', 'margherita', 'sizes', bad]],
+    ]);
   });
 });

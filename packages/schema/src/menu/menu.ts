@@ -75,6 +75,15 @@ export const MenuId = Slug;
 export type MenuId = z.infer<typeof MenuId>;
 
 /**
+ * True if `value` passes `schema`. Zod 4 runs refinements even when a field inside already
+ * failed, so every cross-field check first skips values a primitive rejected. The tenant then
+ * sees exactly one issue per mistake.
+ */
+function passes(schema: z.ZodType, value: unknown): boolean {
+  return schema.safeParse(value).success;
+}
+
+/**
  * A list of enum values without repeats. A repeat is an issue at its index, so the tenant sees
  * which entry to remove.
  */
@@ -83,19 +92,25 @@ function uniqueList<T extends string>(item: z.ZodType<T>, max: number, noun: str
     .array(item)
     .max(max)
     .superRefine((list, ctx) => {
+      const seen = new Set<unknown>();
       list.forEach((value, index) => {
-        if (list.indexOf(value) !== index) {
+        if (!passes(item, value)) return;
+        if (seen.has(value)) {
           ctx.addIssue({
             code: 'custom',
             path: [index],
-            message: `The ${noun} \`${value}\` is listed more than once.`,
+            message: `The ${noun} \`${String(value)}\` is listed more than once.`,
           });
         }
+        seen.add(value);
       });
     });
 }
 
-/** Adds an issue at `[...path, index, 'id']` for every entry whose id was seen before. */
+/**
+ * Adds an issue at `[...path, index, 'id']` for every entry whose id was seen before. Ids that
+ * are not a valid {@link MenuId} already have their own issue and are skipped.
+ */
 function checkUniqueIds(
   entries: readonly { readonly id: string }[],
   path: readonly (string | number)[],
@@ -104,6 +119,7 @@ function checkUniqueIds(
   seen: Set<string> = new Set(),
 ): void {
   entries.forEach((entry, index) => {
+    if (!passes(MenuId, entry.id)) return;
     if (seen.has(entry.id)) {
       ctx.addIssue({
         code: 'custom',
@@ -220,7 +236,11 @@ export function lunchSchema(ctx: LocaleContext) {
     end: TimeOfDay,
     items: z.array(menuItemSchema(ctx)).min(1).max(MENU_LIMITS.lunchItems),
   }).superRefine((lunch, issues) => {
-    if (lunch.start >= lunch.end) {
+    if (
+      passes(TimeOfDay, lunch.start) &&
+      passes(TimeOfDay, lunch.end) &&
+      lunch.start >= lunch.end
+    ) {
       issues.addIssue({
         code: 'custom',
         path: ['end'],
@@ -342,6 +362,8 @@ export function menuSchema(ctx: LocaleContext) {
         });
       }
       for (const [itemId, change] of entries) {
+        // A key that is not a MenuId already has an `invalid_key` issue from the record.
+        if (!passes(MenuId, itemId)) continue;
         const path = ['overrides', locationId, 'items', itemId];
         const item = items.get(itemId);
         if (!item) {
@@ -362,7 +384,7 @@ export function menuSchema(ctx: LocaleContext) {
         if (change.sizes !== undefined) {
           const sizeIds = new Set((item.sizes ?? []).map((size) => size.id));
           for (const sizeId of Object.keys(change.sizes)) {
-            if (!sizeIds.has(sizeId)) {
+            if (passes(MenuId, sizeId) && !sizeIds.has(sizeId)) {
               issues.addIssue({
                 code: 'custom',
                 path: [...path, 'sizes', sizeId],
