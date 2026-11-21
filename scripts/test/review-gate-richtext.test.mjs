@@ -43,7 +43,7 @@ const cases = [
   [['packages/core/src/richtext.md'], ['approved:peer'], []],
   [['packages/core/README.md'], ['approved:peer'], []],
   [['scripts/test/guards.test.mjs'], ['approved:peer'], []],
-  [['scripts/check-licenses.mjs'], ['approved:peer'], []],
+  [['scripts/check-licenses.mjs'], ['approved:peer'], ['approved:security']], // #128
 ];
 
 for (const [files, labels, want] of cases) {
