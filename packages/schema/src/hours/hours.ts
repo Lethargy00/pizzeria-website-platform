@@ -30,11 +30,12 @@ export const WEEKDAYS = [
 export type Weekday = (typeof WEEKDAYS)[number];
 
 /**
- * The ids of the Swedish holiday calendar (`@pwp/core` holidays, `HOLIDAY_IDS`), in the same
- * order. This list is the contract: ADR 0001 lets `@pwp/schema` import only `zod`, so it cannot
- * import the core list. `@pwp/core` must keep its ids equal to this list (#29 / #30 add the test
- * or import it from here). Adding an id is additive; removing or renaming one is a
- * `type:contract` change.
+ * The ids of the Swedish holiday calendar: the values tenants write as `holiday:` in
+ * `hours.yaml`. `@pwp/schema` owns them. `@pwp/core` imports `HOLIDAY_IDS` / `HolidayId` from
+ * `@pwp/schema/hours` and keeps only the dates and names, as a `Record<HolidayId, …>`, so a
+ * missing or extra id is a compile error (architect decision on PR #126, for #29 / #30; the
+ * dependency already points core → schema, ADR 0001). Adding an id is additive; removing or
+ * renaming one is a `type:contract` change.
  */
 export const HOLIDAY_IDS = [
   'nyarsdagen',
@@ -78,6 +79,19 @@ export const MAX_EXCEPTION_DAYS = 366;
 
 const MINUTES_PER_DAY = 1440;
 
+/*
+ * Guards for the custom checks. In zod 4 a format failure of a field does not stop the parent's
+ * `superRefine`, so a check can see a value its primitive already rejected. Every check skips such
+ * values: one mistake gives exactly one issue, at the primitive's path.
+ */
+const isValidTime = (value: unknown): boolean => TimeOfDay.safeParse(value).success;
+const isValidDate = (value: unknown): boolean => IsoDate.safeParse(value).success;
+const isValidInterval = (value: unknown): value is TimeInterval =>
+  typeof value === 'object' &&
+  value !== null &&
+  isValidTime((value as { open?: unknown }).open) &&
+  isValidTime((value as { close?: unknown }).close);
+
 function minutes(time: string): number {
   return Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 }
@@ -94,6 +108,9 @@ function minutes(time: string): number {
  * The schema uses this for its overlap checks, and the opening-hours engine (#30) must use it
  * too, so both read an interval the same way. These are wall-clock minutes; the engine maps
  * them to instants (DST days are 23 or 25 hours long).
+ *
+ * The input must be a validated interval (both times pass `TimeOfDay`); for malformed times the
+ * result is meaningless (for example `NaN`).
  */
 export function intervalSpan(interval: { readonly open: string; readonly close: string }): {
   start: number;
@@ -110,6 +127,7 @@ export function intervalSpan(interval: { readonly open: string; readonly close: 
  */
 export const TimeInterval = strictObject({ open: TimeOfDay, close: TimeOfDay }).superRefine(
   (value, ctx) => {
+    if (!isValidInterval(value)) return;
     if (value.open === value.close && value.open !== '00:00') {
       ctx.addIssue({
         code: 'custom',
@@ -134,7 +152,9 @@ function checkOverlaps(
   pathOf: (index: number) => (string | number)[],
 ): void {
   const sorted = intervals
-    .map((interval, index) => ({ interval, index, ...intervalSpan(interval) }))
+    .map((interval, index) => ({ interval, index }))
+    .filter(({ interval }) => isValidInterval(interval))
+    .map(({ interval, index }) => ({ interval, index, ...intervalSpan(interval) }))
     .sort((a, b) => a.start - b.start || a.index - b.index);
   let latest: (typeof sorted)[number] | undefined;
   for (const current of sorted) {
@@ -172,10 +192,11 @@ export const WeeklySchedule = strictObject({
   WEEKDAYS.forEach((day, d) => {
     const next = WEEKDAYS[(d + 1) % WEEKDAYS.length] as Weekday;
     for (const interval of week[day]) {
+      if (!isValidInterval(interval)) continue;
       const spill = intervalSpan(interval).end - MINUTES_PER_DAY;
       if (spill <= 0) continue;
       week[next].forEach((other, index) => {
-        if (intervalSpan(other).start < spill) {
+        if (isValidInterval(other) && intervalSpan(other).start < spill) {
           ctx.addIssue({
             code: 'custom',
             path: [next, index],
@@ -248,7 +269,9 @@ export function hoursExceptionSchema(ctx: LocaleContext) {
   return strictObject({ date: IsoDate, until: IsoDate.optional(), ...overrideShape(ctx) })
     .superRefine(checkClosedOrIntervals)
     .superRefine((value, refine) => {
-      if (value.until === undefined) return;
+      if (value.until === undefined || !isValidDate(value.date) || !isValidDate(value.until)) {
+        return;
+      }
       const days = dayNumber(value.until) - dayNumber(value.date) + 1;
       if (days < 1) {
         refine.addIssue({
@@ -293,6 +316,7 @@ export function locationHoursSchema(ctx: LocaleContext) {
       .superRefine((rules, refine) => {
         const seen = new Set<string>();
         rules.forEach((rule, index) => {
+          if (!HolidayId.safeParse(rule.holiday).success) return;
           if (seen.has(rule.holiday)) {
             refine.addIssue({
               code: 'custom',
@@ -310,6 +334,8 @@ export function locationHoursSchema(ctx: LocaleContext) {
       .superRefine((exceptions, refine) => {
         const sorted = exceptions
           .map((e, index) => ({ index, from: e.date, to: e.until ?? e.date }))
+          // Skip invalid dates and backwards periods; their own issues are already raised.
+          .filter((e) => isValidDate(e.from) && isValidDate(e.to) && e.to >= e.from)
           .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : a.index - b.index));
         let latest: (typeof sorted)[number] | undefined;
         for (const current of sorted) {
@@ -339,6 +365,7 @@ export function hoursSchema(ctx: LocaleContext) {
       .superRefine((locations, refine) => {
         const seen = new Set<string>();
         locations.forEach((entry, index) => {
+          if (!Slug.safeParse(entry.location).success) return;
           if (seen.has(entry.location)) {
             refine.addIssue({
               code: 'custom',

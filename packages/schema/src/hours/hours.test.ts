@@ -282,3 +282,80 @@ describe('hoursSchema', () => {
     expect(count).toBeGreaterThan(10);
   });
 });
+
+describe('custom checks skip values a primitive already rejected', () => {
+  const at = (...path: (string | number)[]) => ['locations', 0, ...path];
+
+  it('same-time check: 25:00–25:00 gives only the two format issues', () => {
+    const result = TimeInterval.safeParse({ open: '25:00', close: '25:00' });
+    expect(result.error?.issues.map((i) => [i.path, i.code])).toEqual([
+      [['open'], 'invalid_format'],
+      [['close'], 'invalid_format'],
+    ]);
+  });
+
+  it('overlap check: a malformed time gives one issue at that time', () => {
+    const monday = [
+      { open: '10:00', close: '12:00' },
+      { open: '1100', close: '13:00' },
+    ];
+    expect(issues(location({ weekly: { ...weekly, monday } }))).toEqual([
+      { path: at('weekly', 'monday', 1, 'open'), code: 'invalid_format', pwpCode: undefined },
+    ]);
+  });
+
+  it('spill check: malformed times on either side give one issue each', () => {
+    const friday = [{ open: '22:00', close: '0300' }];
+    expect(issues(location({ weekly: { ...weekly, friday } }))).toEqual([
+      { path: at('weekly', 'friday', 0, 'close'), code: 'invalid_format', pwpCode: undefined },
+    ]);
+    const saturday = [{ open: '0100', close: '04:00' }];
+    expect(issues(location({ weekly: { ...weekly, saturday } }))).toEqual([
+      { path: at('weekly', 'saturday', 0, 'open'), code: 'invalid_format', pwpCode: undefined },
+    ]);
+  });
+
+  it('period check: an invalid date gives one issue at that date', () => {
+    const exception = { date: '2026-13-01', until: '2026-01-01', closed: true };
+    expect(issues(location({ exceptions: [exception] }))).toEqual([
+      { path: at('exceptions', 0, 'date'), code: 'invalid_format', pwpCode: undefined },
+    ]);
+  });
+
+  it('date overlap check: invalid dates give only their own issues', () => {
+    const exceptions = [
+      { date: 'nope', closed: true },
+      { date: 'nope', closed: true },
+    ];
+    expect(issues(location({ exceptions }))).toEqual([
+      { path: at('exceptions', 0, 'date'), code: 'invalid_format', pwpCode: undefined },
+      { path: at('exceptions', 1, 'date'), code: 'invalid_format', pwpCode: undefined },
+    ]);
+  });
+
+  it('date overlap check: a backwards period gives only the period issue', () => {
+    const exceptions = [
+      { date: '2026-07-05', closed: true },
+      { date: '2026-07-10', until: '2026-07-01', closed: true },
+    ];
+    expect(issues(location({ exceptions }))).toEqual([
+      { path: at('exceptions', 1, 'until'), code: 'custom', pwpCode: undefined },
+    ]);
+  });
+
+  it('location duplicate check: invalid slugs give only their own issues', () => {
+    const entry = { ...minimalHours.locations[0], location: 'A B' };
+    expect(issues({ locations: [entry, entry] })).toEqual([
+      { path: ['locations', 0, 'location'], code: 'invalid_format', pwpCode: undefined },
+      { path: ['locations', 1, 'location'], code: 'invalid_format', pwpCode: undefined },
+    ]);
+  });
+
+  it('holiday duplicate check: unknown ids give only their own issues', () => {
+    const rule = { holiday: 'christmas', closed: true };
+    expect(issues(location({ holidays: [rule, rule] }))).toEqual([
+      { path: at('holidays', 0, 'holiday'), code: 'invalid_value', pwpCode: undefined },
+      { path: at('holidays', 1, 'holiday'), code: 'invalid_value', pwpCode: undefined },
+    ]);
+  });
+});
