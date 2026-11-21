@@ -91,6 +91,42 @@ test('html-tag: autolinks with allowed schemes and plain email autolinks pass', 
   assert.deepEqual(checkTenants(r), []);
 });
 
+test('html rules also see tags written with YAML double-quoted escapes', () => {
+  const cases = {
+    'body: "\\x3ciframe src=https://evil.example/x\\x3e"': ['html-tag', 'html-embed'],
+    'body: "<meta http-equiv=refresh content=0;url=https://evil.example>"': [
+      'html-tag',
+      'html-embed',
+    ],
+    'body: "\\x3cform action=https://evil.example\\x3e…"': ['html-tag', 'html-embed'],
+    'body: "\\u003cscript\\u003ealert(1)\\u003c/script\\u003e"': ['html-tag', 'html-script'],
+    'body: "\\U0000003cb\\U0000003e"': ['html-tag'],
+    'body: "\\X3Cdiv>"': ['html-tag'],
+  };
+  for (const [line, rules] of Object.entries(cases)) {
+    const got = hits(line);
+    for (const id of rules) assert.ok(got.includes(id), `${line}: ${id} not in ${got}`);
+    const r = tmp();
+    put(r, 't/content/data.yaml', `title: ok\n${line}\n`);
+    const p = checkTenants(r);
+    for (const id of rules)
+      assert.ok(
+        p.some((x) => x.rule === id && x.path === 'tenants/t/content/data.yaml:2'),
+        `${line}: ${JSON.stringify(p)}`,
+      );
+  }
+});
+
+test('html rules: "&lt;" stays a literal "<", and an escaped backslash is not an escape', () => {
+  for (const s of [
+    'body: "&lt;b&gt; visas som text"',
+    'Skriv &lt;div&gt; för att visa en tagg.',
+    'body: "C:\\\\x3cdiv"', // YAML "\\" is a backslash, so "x3cdiv" stays text
+  ])
+    for (const id of ['html-tag', 'html-script', 'html-embed'])
+      assert.ok(!hits(s).includes(id), `${s}: ${id}`);
+});
+
 test('html-tag: a "<" that cannot start a tag passes', () => {
   for (const s of ['Pris < 100 kr', '1 <2 och 3<4', 'Vi <3 pizza', 'a<-b', 'x <= y'])
     assert.deepEqual(hits(s), [], s);
@@ -105,26 +141,43 @@ test('event-handler: quoted, unquoted, slash and quote separated forms fail', ()
     '<svg/onload=alert(1)>',
     '<img src="x"onerror=alert(1)>',
     "<img src='x'onerror=alert(1)>",
-    'x\tonclick=alert(1)',
-    'x\nonclick=alert(1)',
+    '<a href="x"onclick=1>',
+    '<b onclick = x>',
+    '<b x\tonclick=alert(1)>',
+    '<b\nonclick=alert(1)>',
     '<img src=x&#32;onerror=alert(1)>', // entity-encoded separator
     '<img src=x&Tab;onerror=alert(1)>',
+    '`&lt;img src=x onerror=1&gt;`', // a tag built by the entity-decoded view
+    '&lt;img src=x onerror=alert(1)&gt;',
+    '"\\x3cimg src=x onerror=1\\x3e"', // a tag built by YAML escapes
+    `<img ${'x'.repeat(1900)} onerror=1>`, // long attribute run, inside the bound
   ])
     assert.ok(hits(s).includes('event-handler'), JSON.stringify(s));
 });
 
-test('event-handler: ordinary words starting with "on" pass', () => {
+test('event-handler: only matches inside a tag, so prose and URLs with "on…=" pass', () => {
   for (const s of [
     'Öppet onsdag till söndag.',
     'onsdag: 11-22',
     'Beställ online, hämta i butik.',
     'Pizza of the day: one',
-  ])
+    'Varje onsdag = pizzadag',
+    'Onsdag = 2 för 1',
+    'Margherita onsdag=89',
+    'Du kan beställa online = enkelt',
+    'Vi öppnar kl. 11 online=1',
+    '"onsdagar = billigare"',
+    '[Meny](https://example.com/online=1)',
+    '/online=1',
+    'Pris < 100 kr, onsdag = 89 kr', // a "<" that does not start a tag
+  ]) {
     assert.deepEqual(hits(s), [], s);
-  // Fail closed: "on<letters>=" after whitespace or "/" is rejected even in prose or a URL path.
-  // The message says how to rephrase. Kept so a future change to the rule is a deliberate decision.
-  assert.ok(hits('Varje onsdag = pizzadag').includes('event-handler'));
-  assert.ok(hits('[x](https://example.com/online=1)').includes('event-handler'));
+    assert.deepEqual(scan(s), [], s); // as a Markdown line and as a YAML string
+  }
+  // A tag longer than the bound is not matched by event-handler, but it still fails html-tag.
+  const long = `<img ${'x'.repeat(2100)} onerror=1>`;
+  assert.ok(!hits(long).includes('event-handler'));
+  assert.ok(hits(long).includes('html-tag'));
 });
 
 test('js-url: literal, entity-encoded and split scheme forms fail', () => {
@@ -196,7 +249,12 @@ test('a decoded match is reported on the line of its source text', () => {
 
 test('normalizeForScan decodes references and maps back to source indexes', () => {
   const src = 'a&#58;b&colon;c&amp;#58;d\te&#x200b;f&unknown;';
-  const { decoded, stripped: n } = normalizeForScan(src);
+  const { yaml, decoded, stripped: n } = normalizeForScan(src);
+  assert.equal(yaml.text, src); // no YAML escapes in src: entities stay as written
+  const y = normalizeForScan('a\\x3cb\\\\x3c &lt; \\\n   c');
+  assert.equal(y.yaml.text, 'a<b\\x3c &lt; c');
+  assert.equal(y.yaml.map.length, y.yaml.text.length);
+  assert.equal(y.yaml.map[y.yaml.text.lastIndexOf('c')], 'a\\x3cb\\\\x3c &lt; \\\n   c'.length - 1);
   assert.equal(decoded.text, 'a:b:c:d\te\u200bf&unknown;');
   assert.equal(n.text, 'a:b:c:def&unknown;');
   assert.equal(n.map.length, n.text.length);
