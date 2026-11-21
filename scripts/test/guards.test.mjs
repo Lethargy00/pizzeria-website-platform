@@ -82,6 +82,56 @@ test('tenant-guard: forbidden files, types, symlinks', () => {
   assert.ok(rules.includes('symlink tenants/a/peek'));
 });
 
+test('tenant-guard: asset names must match AssetRef segments', () => {
+  const r = tmp();
+  for (const f of [
+    'a/assets/Hero.JPG',
+    'a/assets/Hero.jpg',
+    'a/assets/hero image.jpg',
+    'a/assets/bröd.jpg',
+    'a/assets/日本.png',
+    'a/assets/fonts/Brand.woff2',
+    'a/assets/-x.png',
+    'a/assets/_x.png',
+    'a/assets/.hidden.png',
+    'a/assets/a..b.png',
+    'a/assets/Fonts/ok.woff2',
+  ])
+    put(r, f, 'x');
+  const bad = checkTenants(r)
+    .filter((p) => p.rule === 'asset-name')
+    .map((p) => p.path);
+  for (const f of [
+    'Hero.JPG',
+    'Hero.jpg',
+    'hero image.jpg',
+    'bröd.jpg',
+    '日本.png',
+    'fonts/Brand.woff2',
+    '-x.png',
+    '_x.png',
+    '.hidden.png',
+    'a..b.png',
+    'Fonts',
+  ])
+    assert.ok(bad.includes(`tenants/a/assets/${f}`), f);
+  assert.ok(!bad.includes('tenants/a/assets/Fonts/ok.woff2'));
+  // Files outside assets/ are not subject to the rule.
+  const r2 = tmp();
+  put(r2, 'a/content/pages/About Us.md', '# x\n');
+  assert.deepEqual(checkTenants(r2), []);
+});
+
+test('tenant-guard: valid asset names pass', () => {
+  const r = tmp();
+  put(r, 'a/assets/hero-1_x.v2.jpg', 'x');
+  put(r, 'a/assets/gallery/pizza-01.webp', 'x');
+  put(r, 'a/assets/fonts/display.woff2', 'x');
+  put(r, 'a/assets/.gitkeep');
+  put(r, 'a/assets/README.md', '# assets\n');
+  assert.deepEqual(checkTenants(r), []);
+});
+
 test('tenant-guard: dangerous content in YAML/Markdown', () => {
   const cases = {
     'html-script': 'x: "<script>alert(1)</script>"',

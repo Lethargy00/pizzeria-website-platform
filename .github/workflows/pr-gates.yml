@@ -1,4 +1,10 @@
 name: pr-gates
+# The gate scripts run from the PR's BASE commit, never from the PR's own checkout (#84).
+# A PR that edits scripts/review-gate.mjs or scripts/touches-guard.mjs is therefore judged by
+# the gate already on the base branch, not by its own edited copy. The scripts read the PR's
+# files, labels, body and commits only through the GitHub API, so the PR head is never checked
+# out and no PR code runs here. Trigger stays `pull_request` (never `pull_request_target`), and
+# the token is read-only.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, labeled, unlabeled, ready_for_review]
@@ -11,21 +17,43 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with: { persist-credentials: false }
+      - name: Check out gate scripts from the PR's base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-gate
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+            .nvmrc
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v4
-        with: { node-version-file: .nvmrc }
-      - run: node scripts/review-gate.mjs "${{ github.event.pull_request.number }}"
+        with: { node-version-file: base-gate/.nvmrc }
+      - name: review-gate (base copy)
+        working-directory: base-gate
+        run: node scripts/review-gate.mjs "$PR_NUMBER"
         env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   touches-guard:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with: { persist-credentials: false }
+      - name: Check out gate scripts from the PR's base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-gate
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+            .nvmrc
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v4
-        with: { node-version-file: .nvmrc }
-      - run: node scripts/touches-guard.mjs "${{ github.event.pull_request.number }}"
+        with: { node-version-file: base-gate/.nvmrc }
+      - name: touches-guard (base copy)
+        working-directory: base-gate
+        run: node scripts/touches-guard.mjs "$PR_NUMBER"
         env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
