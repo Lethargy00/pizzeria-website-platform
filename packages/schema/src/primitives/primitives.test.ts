@@ -7,6 +7,8 @@ import {
   FontRef,
   ImageRef,
   IsoDate,
+  IsoDateTime,
+  MAX_ISO_DATE_TIME_LENGTH,
   LocaleCode,
   LocalizedString,
   PhoneNumber,
@@ -26,6 +28,7 @@ import {
   assetRefFixtures,
   emailFixtures,
   isoDateFixtures,
+  isoDateTimeFixtures,
   localeCodeFixtures,
   localizedStringAnyFixtures,
   localizedStringSvEnFixtures,
@@ -98,6 +101,41 @@ describe('WEEKDAYS', () => {
     expect(hours.WEEKDAYS).toBe(WEEKDAYS);
     expect(menu.WEEKDAYS).toBe(WEEKDAYS);
     expect(menu.Weekday).toBe(Weekday);
+  });
+});
+
+table('IsoDateTime', IsoDateTime, isoDateTimeFixtures);
+
+describe('IsoDateTime (#145)', () => {
+  it('accepts what Date#toISOString() produces, and round-trips it', () => {
+    const value = new Date(Date.UTC(2026, 10, 21, 4, 0, 0, 7)).toISOString();
+    expect(value).toBe('2026-11-21T04:00:00.007Z');
+    expect(IsoDateTime.parse(value)).toBe(value);
+    expect(new Date(value).toISOString()).toBe(value);
+  });
+
+  it('bounds the length through the pattern', () => {
+    expect('2026-11-21T04:00:00.000Z').toHaveLength(MAX_ISO_DATE_TIME_LENGTH);
+  });
+
+  it.each([
+    ['an offset', '2026-11-21T04:00:00+01:00'],
+    ['local time', '2026-11-21T04:00:00'],
+    ['a date only', '2026-11-21'],
+    ['an impossible date', '2026-02-30T00:00:00Z'],
+    ['a leap second', '2026-12-31T23:59:60Z'],
+    ['two fraction digits', '2026-11-21T04:00:00.12Z'],
+    ['a very long fraction', `2026-11-21T04:00:00.${'1'.repeat(1000)}Z`],
+  ])('raises exactly one invalid_format issue for %s', (_, value) => {
+    expect(IsoDateTime.safeParse(value).error?.issues).toEqual([
+      expect.objectContaining({ code: 'invalid_format', format: 'datetime', path: [] }),
+    ]);
+  });
+
+  it('raises exactly one invalid_type issue for a non-string', () => {
+    expect(IsoDateTime.safeParse(1_763_640_000).error?.issues).toEqual([
+      expect.objectContaining({ code: 'invalid_type', expected: 'string', path: [] }),
+    ]);
   });
 });
 table(

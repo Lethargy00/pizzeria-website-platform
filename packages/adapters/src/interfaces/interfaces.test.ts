@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import * as schemaAdapters from '@pwp/schema/adapters';
+import { IsoDateTime } from '@pwp/schema/primitives';
 import type { Email, LocaleCode, Slug } from '@pwp/schema/primitives';
 import * as interfaces from './index.js';
 import {
@@ -179,6 +180,18 @@ describe('adapter contracts', () => {
     expectTypeOf<EmailAddress['address']>().toEqualTypeOf<Email>();
     expectTypeOf<EmailMessage['locale']>().toEqualTypeOf<LocaleCode>();
     expectTypeOf<WebhookEvent['tenant']>().toEqualTypeOf<Slug>();
+    expectTypeOf<WebhookEvent['occurredAt']>().toEqualTypeOf<IsoDateTime>();
+  });
+
+  it('occurredAt is a UTC IsoDateTime, as Date#toISOString() writes it (#145)', () => {
+    const occurredAt: WebhookEvent['occurredAt'] = new Date(
+      Date.UTC(2026, 10, 21, 4),
+    ).toISOString();
+    expect(IsoDateTime.safeParse(occurredAt).success).toBe(true);
+    expect(IsoDateTime.safeParse('2026-11-21T04:00:00Z').success).toBe(true);
+    expect(IsoDateTime.safeParse('2026-11-21T05:00:00+01:00').success).toBe(false);
+    expect(IsoDateTime.safeParse('2026-11-21T04:00:00').success).toBe(false);
+    expect(IsoDateTime.safeParse('2026-11-21').success).toBe(false);
   });
 
   it('AdapterError derives retryable from its code', () => {

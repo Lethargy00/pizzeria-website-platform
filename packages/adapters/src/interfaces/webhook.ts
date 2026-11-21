@@ -60,7 +60,7 @@
  *   connection. It is never logged, put into an error `message` or `cause`, or returned.
  */
 
-import type { Slug } from '@pwp/schema/primitives';
+import type { IsoDateTime, Slug } from '@pwp/schema/primitives';
 import type { WebhookAdapterName } from '@pwp/schema/adapters';
 import type { AdapterCallOptions, AdapterEnvVarName } from './index.js';
 
@@ -119,10 +119,11 @@ export interface WebhookEvent {
   /** Location id within the tenant, when the form is per location. */
   readonly location?: string;
   /**
-   * ISO 8601 UTC date-time of the submission (not of the delivery attempt). A plain string:
-   * `@pwp/schema` has no date-time primitive yet (`IsoDate` is a calendar date only).
+   * When the form was submitted (not when this delivery attempt was made), as a UTC
+   * `IsoDateTime` (#145): `YYYY-MM-DDTHH:mm:ss.sssZ` from `Date#toISOString()`, or without the
+   * millisecond part. Never an offset or a local time.
    */
-  readonly occurredAt: string;
+  readonly occurredAt: IsoDateTime;
   /** Schema version of `data`, bumped on breaking changes to the form payloads. */
   readonly version: 1;
   /**
