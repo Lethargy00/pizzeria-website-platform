@@ -22,7 +22,13 @@ const HUMAN = { login: 'Wetterbro', type: 'User', id: 47597724 };
 const WEBFLOW = { login: 'web-flow', type: 'User', id: 19864447 };
 const botCommit = { sha: 'a'.repeat(40), author: BOT, committer: WEBFLOW, verified: true };
 const ISSUE = '## Touches\n- `scripts/**`\n';
-const issueBody = (n) => (n === 59 ? ISSUE : '');
+// #150: Touches are trusted only from a collaborator's issue that carries an agent:* label.
+const TRUSTED = {
+  repository_url: 'https://api.github.com/repos/o/r',
+  author_association: 'COLLABORATOR',
+  labels: [{ name: 'agent:platform-1' }],
+};
+const issueBody = (n) => ({ number: n, ...TRUSTED, body: n === 59 ? ISSUE : '' });
 const DEP_BODY = 'Bumps vitest from 3.2.4 to 5.1.0.\n\n---\nDependabot commands and options';
 
 const run = (pr) => evaluateTouches({ commits: [botCommit], body: DEP_BODY, issueBody, ...pr });
