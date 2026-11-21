@@ -131,26 +131,39 @@ test('CODEOWNERS: the rest of @pwp/core and ordinary scripts are not marked for 
   assert.doesNotMatch(ownerOf('scripts/typecheck.mjs').note, /security/);
 });
 
-// --- every ALT_MANIFESTS glob has a CODEOWNERS line with a security note (#160) ---------------
-// review-gate.mjs treats ALT_MANIFESTS as dependency paths (which need approved:security), so
-// CODEOWNERS must say so. The list is read from the source text so it cannot drift.
+// --- every dependency path has a CODEOWNERS line with a security note (#160) -----------------
+// review-gate.mjs treats DEPENDENCY_PATHS (which include ALT_MANIFESTS) and PACKAGE_MANIFESTS
+// as dependency paths needing approved:security, so CODEOWNERS must say so. The lists are read
+// from the source text so they cannot drift.
 const gateSrc = readFileSync(new URL('../review-gate.mjs', import.meta.url), 'utf8');
-const altBlock = /export const ALT_MANIFESTS = \[([\s\S]*?)\];/.exec(gateSrc);
-const altGlobs = altBlock ? [...altBlock[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
+const stringsOf = (name) => {
+  const block = new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\];`).exec(gateSrc);
+  return block
+    ? [...block[1].replace(/\/\/.*$/gm, '').matchAll(/'([^']+)'/g)].map((m) => m[1])
+    : [];
+};
+const altGlobs = stringsOf('ALT_MANIFESTS');
+const depGlobs = stringsOf('DEPENDENCY_PATHS');
+const packageManifests = /export const PACKAGE_MANIFESTS = '([^']+)'/.exec(gateSrc)?.[1];
+const expandBraces = (glob) => {
+  const braces = /\{([^}]+)\}/.exec(glob);
+  return braces ? braces[1].split(',').map((x) => glob.replace(braces[0], x)) : [glob];
+};
 
-test('ALT_MANIFESTS was parsed from review-gate.mjs', () => {
+test('ALT_MANIFESTS and DEPENDENCY_PATHS were parsed from review-gate.mjs', () => {
   assert.ok(altGlobs.length >= 3, `parsed ${JSON.stringify(altGlobs)}`);
+  assert.ok(depGlobs.length >= 7, `parsed ${JSON.stringify(depGlobs)}`);
+  assert.ok(packageManifests, 'PACKAGE_MANIFESTS not found');
 });
 
-for (const glob of altGlobs) {
-  const braces = /\{([^}]+)\}/.exec(glob);
-  const expanded = braces ? braces[1].split(',').map((x) => glob.replace(braces[0], x)) : [glob];
-  for (const g of expanded) {
-    test(`CODEOWNERS: ALT_MANIFESTS ${g} is owned with security review`, () => {
-      const e = ownerOf(g.replaceAll('*', 'x'));
-      assert.ok(e, `no CODEOWNERS entry matches ${g}`);
-      assert.ok(e.owners.length > 0, `${g} has no owner`);
-      assert.match(e.note, /\bsecurity\b/, `${g} resolves to "#${e.note}"`);
-    });
-  }
+const allDependencyGlobs = [...new Set([...altGlobs, ...depGlobs, packageManifests])].filter(
+  Boolean,
+);
+for (const g of allDependencyGlobs.flatMap(expandBraces)) {
+  test(`CODEOWNERS: dependency path ${g} is owned with security review`, () => {
+    const e = ownerOf(g.replaceAll('*', 'x'));
+    assert.ok(e, `no CODEOWNERS entry matches ${g}`);
+    assert.ok(e.owners.length > 0, `${g} has no owner`);
+    assert.match(e.note, /\bsecurity\b/, `${g} resolves to "#${e.note}"`);
+  });
 }
