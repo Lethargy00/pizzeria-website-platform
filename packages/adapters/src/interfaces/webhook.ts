@@ -11,7 +11,7 @@
  *
  * | Header                  | Value                                                            |
  * | ----------------------- | ---------------------------------------------------------------- |
- * | `X-PWP-Event`           | `event.type`                                                     |
+ * | `X-PWP-Event`           | `event.type`; **unsigned, informational only** (see below)       |
  * | `X-PWP-Idempotency-Key` | `event.id` (identical on every retry of the same event)          |
  * | `X-PWP-Timestamp`       | Unix time in **seconds** when this attempt was signed            |
  * | `X-PWP-Signature`       | `v1=<hex>`; during secret rotation `v1=<hex>,v1=<hex>`           |
@@ -22,6 +22,9 @@
  *
  * Receivers must:
  * - recompute the HMAC over the raw body before parsing JSON;
+ * - route on the **signed body's** `type` field only. `X-PWP-Event` is not covered by the
+ *   signature, so an attacker who replays a captured body can set it to anything; it is a hint
+ *   for logs and proxies, never input to a routing or authorisation decision;
  * - compare in constant time against every `v1=` entry, **ignore entries with an unknown
  *   version** (never treat them as valid), and reject when no `v1=` entry matches;
  * - reject when `|now - timestamp| > WEBHOOK_TOLERANCE_SECONDS`;
@@ -57,11 +60,12 @@
  *   connection. It is never logged, put into an error `message` or `cause`, or returned.
  */
 
-import type { AdapterCallOptions } from './index.js';
+import type { Slug } from '@pwp/schema/primitives';
+import type { WebhookAdapterName } from '@pwp/schema/adapters';
+import type { AdapterCallOptions, AdapterEnvVarName } from './index.js';
 
-/** Closed set of webhook adapter names (= folder names). Moves to `@pwp/schema/adapters` in #64. */
-export const WEBHOOK_ADAPTER_NAMES = ['mock-webhook'] as const;
-export type WebhookAdapterName = (typeof WEBHOOK_ADAPTER_NAMES)[number];
+/** Closed set of webhook adapter names (= folder names). Canonical in `@pwp/schema/adapters` (#64). */
+export { WEBHOOK_ADAPTER_NAMES, type WebhookAdapterName } from '@pwp/schema/adapters';
 
 /** Env vars shared by every webhook adapter. */
 export const WEBHOOK_ENV = {
@@ -71,7 +75,7 @@ export const WEBHOOK_ENV = {
   secret: 'WEBHOOK_SECRET',
   /** Optional second key, signed in addition during rotation. **Secret**. */
   previousSecret: 'WEBHOOK_SECRET_PREVIOUS',
-} as const;
+} as const satisfies Record<string, AdapterEnvVarName<'webhook'>>;
 
 export const WEBHOOK_HEADERS = {
   event: 'X-PWP-Event',
@@ -110,11 +114,14 @@ export interface WebhookEvent {
   /** Unique event id (UUID v4); also the idempotency key. */
   readonly id: string;
   readonly type: WebhookEventType;
-  /** Tenant slug. */
-  readonly tenant: string;
+  /** Tenant slug (`@pwp/schema` `Slug`). */
+  readonly tenant: Slug;
   /** Location id within the tenant, when the form is per location. */
   readonly location?: string;
-  /** ISO 8601 UTC timestamp of the submission (not of the delivery attempt). */
+  /**
+   * ISO 8601 UTC date-time of the submission (not of the delivery attempt). A plain string:
+   * `@pwp/schema` has no date-time primitive yet (`IsoDate` is a calendar date only).
+   */
   readonly occurredAt: string;
   /** Schema version of `data`, bumped on breaking changes to the form payloads. */
   readonly version: 1;
@@ -138,8 +145,8 @@ export interface WebhookDeliveryResult {
  * - Resolves when the receiver answered `2xx`.
  * - Rejects only with `AdapterError`: `misconfigured` (no or non-https URL, weak secret, or a
  *   resolved address refused by the SSRF rules in this file's header), `rejected` (`4xx` other
- *   than 408/429), `throttled` (429), `timeout`, `unavailable` (`5xx`, network). Redirects are
- *   not followed (`rejected`).
+ *   than 408/429), `throttled` (429), `timeout` (HTTP 408, or no answer in time), `unavailable`
+ *   (`5xx`, network). Redirects are not followed (`rejected`).
  * - Never logs `event.data`, the URL or the secret. Logs at most `id`, `type`, status, attempts.
  */
 export interface WebhookNotifier {
