@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc }
       - run: node --test "scripts/**/*.test.mjs"
       - run: node scripts/tenant-guard.mjs
@@ -36,7 +36,7 @@ jobs:
         run: |
           test -f pnpm-lock.yaml || { echo "::error::pnpm-lock.yaml is missing. Run the 'bootstrap-lockfile' workflow (docs/HANDOFF.md)."; exit 1; }
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
