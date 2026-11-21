@@ -41,34 +41,50 @@
  *
  * ## Follow-ups
  *
- * - The data types are slots of {@link ContentModel} because their contracts are not merged yet:
- *   `SiteConfig` (#52), `ThemeOverride` (#34 / PR #110), `Menu` (#25 / PR #127), `Hours`
- *   (#26 / PR #126), `Locations` (#27 / PR #124) and `ValidationIssue` (#23 / PR #88). A
- *   `type:contract` follow-up sets the defaults of {@link ContentModel} to those types. That is
- *   additive: implementations that already pass a concrete model keep compiling.
+ * - `menu`, `hours` and `locations` are bound to their merged `@pwp/schema` types in
+ *   {@link DefaultContentModel}. Three slots are still `unknown`, because their contracts are not
+ *   merged: `SiteConfig` (#52), `ThemeOverride` (#34 / PR #110) and `ValidationIssue`
+ *   (#23 / PR #88). A `type:contract` follow-up binds them in {@link DefaultContentModel}. That
+ *   is additive: implementations that pass a concrete model keep compiling.
  * - Re-export from `interfaces/index.ts` and type tests in `interfaces.test.ts` (outside #28's
  *   Touches).
  */
 
+import type { Hours } from '@pwp/schema/hours';
+import type { Locations } from '@pwp/schema/locations';
+import type { Menu } from '@pwp/schema/menu';
 import type { PageFrontMatter } from '@pwp/schema/pages';
 import type { LocaleContext } from '@pwp/schema/primitives';
 
 /**
- * The types a content source returns, one slot per tenant file. Every slot is the **output**
- * type of the matching `@pwp/schema` schema (ADR 0003 section 5).
+ * The shape of the types a content source returns, one slot per tenant file. Every slot is the
+ * **output** type of the matching `@pwp/schema` schema (ADR 0003 section 5).
  */
 export interface ContentModel {
-  /** `site.config.yaml`: `SiteConfig` from `@pwp/schema/site-config` (#52). */
+  /** `site.config.yaml`. */
   readonly siteConfig: unknown;
-  /** `theme.yaml`: `ThemeOverride` from `@pwp/schema/theme` (#34). */
+  /** `theme.yaml`. */
   readonly theme: unknown;
-  /** `content/menu.yaml`: `Menu` from `@pwp/schema/menu` (#25). */
+  /** `content/menu.yaml`. */
   readonly menu: unknown;
-  /** `content/hours.yaml`: `Hours` from `@pwp/schema/hours` (#26). */
+  /** `content/hours.yaml`. */
   readonly hours: unknown;
-  /** `content/locations.yaml`: `Locations` from `@pwp/schema/locations` (#27). */
+  /** `content/locations.yaml`. */
   readonly locations: unknown;
-  /** One problem: `ValidationIssue` from `@pwp/schema/errors` (#23). */
+  /** One problem found while loading. */
+  readonly issue: unknown;
+}
+
+/** The model every content source uses unless it names another one. */
+export interface DefaultContentModel extends ContentModel {
+  /** `SiteConfig` from `@pwp/schema/site-config` (#52), not merged yet. */
+  readonly siteConfig: unknown;
+  /** `ThemeOverride` from `@pwp/schema/theme` (#34), not merged yet. */
+  readonly theme: unknown;
+  readonly menu: Menu;
+  readonly hours: Hours;
+  readonly locations: Locations;
+  /** `ValidationIssue` from `@pwp/schema/errors` (#23), not merged yet. */
   readonly issue: unknown;
 }
 
@@ -123,7 +139,7 @@ export interface ResolvedAsset {
  * Read access to **one** tenant's content. See the module comment for scope, loader order and
  * result rules. All methods are read-only: a content source never writes tenant content.
  */
-export interface ContentSource<M extends ContentModel = ContentModel> {
+export interface ContentSource<M extends ContentModel = DefaultContentModel> {
   /**
    * The slug of the tenant this source is bound to, for messages and logs. Informational only:
    * nothing is looked up by it.
