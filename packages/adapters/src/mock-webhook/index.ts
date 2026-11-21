@@ -32,12 +32,12 @@ import type {
   WebhookEvent,
   WebhookNotifier,
 } from '../interfaces/index.js';
-import { buildSignatureHeader } from './signature.js';
+import { buildSignatureHeader, isStrongWebhookSecret } from './signature.js';
 import { bareHost, isBlockedAddress, isIpLiteral } from './ssrf.js';
 
 const NAME = 'mock-webhook' as const;
 
-export { signWebhook, verifyWebhookSignature } from './signature.js';
+export { isStrongWebhookSecret, signWebhook, verifyWebhookSignature } from './signature.js';
 export type { VerifyWebhookInput } from './signature.js';
 export { isBlockedAddress } from './ssrf.js';
 
@@ -54,7 +54,6 @@ export const WEBHOOK_DEFAULT_TIMEOUT_MS = 30_000;
 /** At most this many response-body bytes are read, only to drain the connection. */
 export const WEBHOOK_MAX_RESPONSE_BYTES = 4096;
 const MAX_BODY_BYTES = 256 * 1024;
-const SECRET_RE = /^[A-Za-z0-9_-]{43,}$/; // 64+ hex chars and 43+ base64url chars both match
 const HEADER_SAFE_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const EVENT_TYPES = new Set(['contact.submitted', 'catering.requested', 'reservation.requested']);
 
@@ -138,9 +137,16 @@ function fail(code: AdapterErrorCode, message: string): AdapterError {
   return new AdapterError('webhook', NAME, code, message);
 }
 
-/** Offline stand-in for DNS: IP literals resolve to themselves, names to a TEST-NET-3 address. */
+/**
+ * What the default resolver answers for any host name. It must be global unicast to pass the
+ * SSRF allow-list (documentation ranges such as TEST-NET-3 are refused). Nothing ever connects
+ * to it: the default transport opens no socket.
+ */
+export const MOCK_RESOLVED_ADDRESS = '8.8.8.8';
+
+/** Offline stand-in for DNS: IP literals resolve to themselves, names to a fixed address. */
 const defaultResolve: WebhookResolver = (hostname) =>
-  Promise.resolve(isIpLiteral(hostname) ? [hostname] : ['203.0.113.10']);
+  Promise.resolve(isIpLiteral(hostname) ? [hostname] : [MOCK_RESOLVED_ADDRESS]);
 
 /** Default transport: records only (the notifier does that) and answers 200. No network. */
 const defaultTransport: WebhookTransport = {
@@ -213,11 +219,11 @@ function statusToError(status: number): AdapterError | null {
 export function createMockWebhookNotifier(options: MockWebhookOptions): MockWebhookNotifier {
   const target = parseTarget(options.url);
   const secrets = [options.secret];
-  if (typeof options.secret !== 'string' || !SECRET_RE.test(options.secret)) {
+  if (!isStrongWebhookSecret(options.secret)) {
     throw fail('misconfigured', `${WEBHOOK_ENV.secret} is missing or too weak`);
   }
   if (options.previousSecret !== undefined) {
-    if (!SECRET_RE.test(options.previousSecret)) {
+    if (!isStrongWebhookSecret(options.previousSecret)) {
       throw fail('misconfigured', `${WEBHOOK_ENV.previousSecret} is too weak`);
     }
     secrets.push(options.previousSecret);
@@ -316,11 +322,14 @@ export function createMockWebhookNotifier(options: MockWebhookOptions): MockWebh
       const body = validateEvent(event);
       const deadline = now() + (callOptions?.timeoutMs ?? WEBHOOK_DEFAULT_TIMEOUT_MS);
       let lastError: AdapterError = fail('unavailable', 'webhook delivery failed');
+      /** Attempts made by this call only (`deliveries` spans every call since `reset()`). */
+      let attempts = 0;
 
       for (let attempt = 1; attempt <= WEBHOOK_RETRY_POLICY.maxAttempts; attempt++) {
         const remaining = deadline - now();
         if (remaining <= 0) throw attempt === 1 ? fail('timeout', 'webhook timed out') : lastError;
         let status = 0;
+        attempts = attempt;
         try {
           status = await attemptOnce(event, body, attempt, Math.min(attemptCap, remaining));
           const err = statusToError(status);
@@ -341,7 +350,7 @@ export function createMockWebhookNotifier(options: MockWebhookOptions): MockWebh
         id: event.id,
         type: event.type,
         status: 0,
-        attempts: deliveries.length,
+        attempts,
       });
       throw lastError;
     },

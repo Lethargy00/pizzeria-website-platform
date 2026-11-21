@@ -33,11 +33,23 @@
  *
  * `WEBHOOK_URL` is tenant-configured, so a real adapter must:
  * - accept `https:` only, and follow no redirects;
- * - resolve the host and **refuse** the delivery when any resolved address is loopback,
- *   private (RFC 1918), link-local (incl. `169.254.169.254` cloud metadata), CGNAT
- *   (`100.64.0.0/10`), unique-local (`fc00::/7`), multicast or unspecified (`0.0.0.0`, `::`),
- *   including the IPv4-mapped IPv6 forms of these (`::ffff:a.b.c.d`). Refusal is
- *   `AdapterError` code `misconfigured`, and its message does not contain the URL or the address;
+ * - resolve the host and **refuse** the delivery unless **every** resolved address is global
+ *   unicast. This is an allow-list, not a denylist (#100):
+ *   - IPv4 is allowed unless it is in an IANA IPv4 special-purpose range that is not globally
+ *     reachable. That covers `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16` (incl.
+ *     `169.254.169.254` cloud metadata), `172.16/12`, `192.0.0/24`, `192.0.2/24`,
+ *     `192.88.99/24`, `192.168/16`, `198.18/15`, `198.51.100/24` and `203.0.113/24`. Multicast
+ *     `224/4` and reserved `240/4` are refused as well.
+ *   - IPv6 is allowed only inside `2000::/3`, minus `2001::/23` (incl. Teredo `2001::/32`),
+ *     `2001:db8::/32`, `2002::/16` (6to4) and `3fff::/20`. Outside `2000::/3`, only IPv4-mapped
+ *     `::ffff:0:0/96` and well-known NAT64 `64:ff9b::/96` are accepted, and only when the
+ *     embedded IPv4 address is allowed. Everything else is refused, including loopback,
+ *     unspecified, `fc00::/7`, `fe80::/10`, multicast, IPv4-translated `::ffff:0:0:0/96`,
+ *     IPv4-compatible `::/96`, local-use NAT64 `64:ff9b:1::/48` and discard `100::/64`.
+ *   - Unparseable addresses are refused.
+ *
+ *   Refusal is `AdapterError` code `misconfigured`, and its message does not contain the URL or
+ *   the address;
  * - **connect to the vetted IP** (keeping the original host for TLS SNI and `Host`), so DNS
  *   rebinding can't swap the address between the check and the connect;
  * - apply a timeout to **each attempt**, as well as the overall `AdapterCallOptions.timeoutMs`;

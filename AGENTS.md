@@ -225,6 +225,27 @@ gh issue edit <n> --remove-label "status:in-progress" --add-label "status:in-rev
 
 ---
 
+### 10.1 The review matrix and the `review-gate` check
+
+The `review-gate` CI job reads a PR's changed paths and labels, compares them with the `MATRIX` in `scripts/review-gate.mjs`, and fails if a required `approved:<role>` label is missing. PROMPT.md §11.2 is the human summary of the same matrix. The rows that matter most for security:
+
+- **`peer`**: every PR needs `approved:peer`.
+- **`security`** (`approved:security`): a PR with the label `security:sensitive`, or one that changes a security-sensitive path. The list includes `.github/workflows/**`, the gate scripts `scripts/review-gate.mjs`, `scripts/touches-guard.mjs` and `scripts/tenant-guard.mjs`, `.github/CODEOWNERS`, and the functions, adapters, forms, CSP, headers and sanitizer paths.
+- **`richtext`** (`approved:security`, ADR 0002 Enforcement (c), #81): any change to one of these paths requires `approved:security`, even when no other row applies:
+  - `packages/core/src/richtext/**` (`renderMarkdown`, the `SafeHtml` constructor, the sanitize schema)
+  - `packages/core/package.json` (the `./richtext` subpath export)
+  - `scripts/boundaries.json` and `scripts/check-boundaries.mjs` (the ADR 0002 (a) import rule and its check)
+  - `scripts/check-html-sinks.mjs` (the ADR 0002 (b) and (d) HTML-sink check)
+  - `scripts/test/richtext-*` and `scripts/test/*html-sink*` (the fixtures that prove those checks)
+
+**Security-reviewed paths in CODEOWNERS.** The last section of `.github/CODEOWNERS` marks these paths as security-reviewed. It sits last because CODEOWNERS uses the last matching pattern, so it overrides the broader role entries above it:
+
+- the workflows: `/.github/workflows/` and `/.github/CODEOWNERS`
+- the gate scripts: `/scripts/review-gate.mjs`, `/scripts/touches-guard.mjs`, every `/scripts/*-guard.mjs`, and `/scripts/lib/`, which the gates share
+- the rich-text paths in the `richtext` row above
+
+Every CODEOWNERS entry currently maps to the one shared GitHub account, so the comment after each entry, not the account, says which role must review. The CODEOWNERS section and the matrix do not match exactly. `scripts/lib/` is marked security-reviewed in CODEOWNERS but is not listed in the `security` row, so a change that touches only `scripts/lib/` does not make `review-gate` require `approved:security`. Reviewers must still check it by hand.
+
 ## 11. Comment formats (copy exactly)
 
 Every comment starts with the signature line. Use one of these types as the first word after it:

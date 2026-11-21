@@ -4,10 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { AdapterError, WEBHOOK_HEADERS, WEBHOOK_TOLERANCE_SECONDS } from '../interfaces/index.js';
 import type { WebhookEvent } from '../interfaces/index.js';
 import {
+  MOCK_RESOLVED_ADDRESS,
   WEBHOOK_MAX_RESPONSE_BYTES,
   WEBHOOK_RETRY_POLICY,
   createMockWebhookNotifier,
   factory,
+  isStrongWebhookSecret,
   verifyWebhookSignature,
 } from './index.js';
 import type {
@@ -117,6 +119,30 @@ describe('mock-webhook: delivery, signing and retries', () => {
     );
   });
 
+  it('verifier throws on an empty secret list or an empty or weak secret (#100)', async () => {
+    const { notifier, sent } = make();
+    await notifier.notify(EVENT);
+    const h = sent[0]?.headers ?? {};
+    const base = {
+      timestampHeader: h[WEBHOOK_HEADERS.timestamp] ?? '',
+      rawBody: sent[0]?.body ?? '',
+    };
+    // A signature made with the empty key: the old verifier accepted it with secrets: [''].
+    const forged = `v1=${createHmac('sha256', '').update(`${base.timestampHeader}.${base.rawBody}`).digest('hex')}`;
+    for (const secrets of [[], [''], ['short'], [SECRET, ''], ['a'.repeat(42)]]) {
+      expect(() => verifyWebhookSignature({ ...base, secrets, signatureHeader: forged })).toThrow(
+        TypeError,
+      );
+    }
+    try {
+      verifyWebhookSignature({ ...base, secrets: ['weak-secret'], signatureHeader: forged });
+    } catch (e) {
+      expect((e as Error).message).not.toContain('weak-secret');
+    }
+    expect(isStrongWebhookSecret('')).toBe(false);
+    expect(isStrongWebhookSecret(SECRET)).toBe(true);
+  });
+
   it('signs with both keys during rotation and ignores unknown signature versions', async () => {
     const { notifier, sent } = make({ previousSecret: OLD_SECRET });
     await notifier.notify(EVENT);
@@ -163,6 +189,18 @@ describe('mock-webhook: delivery, signing and retries', () => {
     expect(err.code).toBe('unavailable');
     expect(err.retryable).toBe(true);
     expect(sent).toHaveLength(3);
+  });
+
+  it('failure log counts only the attempts of this call (#100)', async () => {
+    const logs: { attempts: number }[] = [];
+    const { notifier } = make({
+      transport: statuses(500),
+      logger: { info: (e) => logs.push(e) },
+    });
+    await failure(notifier.notify(EVENT));
+    await failure(notifier.notify(EVENT));
+    expect(notifier.deliveries).toHaveLength(6);
+    expect(logs.map((l) => l.attempts)).toEqual([3, 3]);
   });
 
   it('maps 429 to throttled (retried) and 408 to timeout (retried)', async () => {
@@ -338,9 +376,60 @@ describe('mock-webhook SSRF rules', () => {
     });
   });
 
+  describe('rule: allow-list refuses every non-global range (one test per range, #100)', () => {
+    // Ranges that the old denylist let through. Each row is one range, probed at an address
+    // inside it; the comment names the range.
+    const newlyCovered: [string, string][] = [
+      ['IPv4-translated ::ffff:0:0:0/96', '::ffff:0:7f00:1'],
+      ['IPv4-translated ::ffff:0:0:0/96, public v4', '::ffff:0:808:808'],
+      ['local-use NAT64 64:ff9b:1::/48', '64:ff9b:1::a00:1'],
+      ['local-use NAT64 64:ff9b:1::/48, public v4', '64:ff9b:1::808:808'],
+      ['Teredo 2001::/32', '2001:0:4136:e378:8000:63bf:3fff:fdd2'],
+      ['IETF protocol assignments 2001::/23', '2001:2::1'],
+      ['IETF 192.0.0.0/24', '192.0.0.1'],
+      ['IETF 192.0.0.0/24 high', '192.0.0.255'],
+      ['benchmarking 198.18.0.0/15 low', '198.18.0.1'],
+      ['benchmarking 198.18.0.0/15 high', '198.19.255.254'],
+      ['discard 100::/64', '100::1'],
+      ['documentation TEST-NET-1 192.0.2.0/24', '192.0.2.1'],
+      ['documentation TEST-NET-2 198.51.100.0/24', '198.51.100.1'],
+      ['documentation TEST-NET-3 203.0.113.0/24', '203.0.113.7'],
+      ['6to4 relay anycast 192.88.99.0/24', '192.88.99.1'],
+      ['reserved 240.0.0.0/4', '240.0.0.1'],
+      ['broadcast', '255.255.255.255'],
+      ['documentation 2001:db8::/32', '2001:db8::1'],
+      ['documentation 3fff::/20', '3fff::1'],
+      ['6to4 2002::/16, public v4', '2002:808:808::1'],
+      ['IPv4-compatible ::/96, public v4', '::8.8.8.8'],
+      ['deprecated site-local fec0::/10', 'fec0::1'],
+      ['outside 2000::/3 (4000::/3)', '4000::1'],
+      ['outside 2000::/3 (SRv6 5f00::/16)', '5f00::1'],
+      ['outside 2000::/3 (1000::/4)', '1000::1'],
+    ];
+    it.each(newlyCovered)('%s (%s)', async (_label, address) => {
+      const { notifier, sent } = make({ resolve: () => Promise.resolve([address]) });
+      const err = await failure(notifier.notify(EVENT));
+      expect(err.code).toBe('misconfigured');
+      expect(sent).toHaveLength(0);
+    });
+
+    it('edges of 198.18.0.0/15 and 192.0.0.0/24 stay public just outside', async () => {
+      for (const address of ['198.17.255.255', '198.20.0.1', '192.0.1.1']) {
+        const { notifier } = make({ resolve: () => Promise.resolve([address]) });
+        await expect(notifier.notify(EVENT)).resolves.toMatchObject({ status: 200 });
+      }
+    });
+
+    it('the default resolver answers a global address, so the default mock still delivers', async () => {
+      const notifier = createMockWebhookNotifier({ url: URL_WITH_TOKEN, secret: SECRET });
+      await expect(notifier.notify(EVENT)).resolves.toMatchObject({ status: 200 });
+      expect(notifier.deliveries[0]?.ip).toBe(MOCK_RESOLVED_ADDRESS);
+    });
+  });
+
   it('rule: refuse when ANY resolved address is blocked, even if another is public', async () => {
     const { notifier, sent } = make({
-      resolve: () => Promise.resolve(['203.0.113.7', '10.0.0.5']),
+      resolve: () => Promise.resolve(['8.8.8.8', '10.0.0.5']),
     });
     expect((await failure(notifier.notify(EVENT))).code).toBe('misconfigured');
     expect(sent).toHaveLength(0);
@@ -356,7 +445,15 @@ describe('mock-webhook SSRF rules', () => {
   });
 
   it('rule: public addresses, including public mapped IPv6, are allowed', async () => {
-    for (const address of ['203.0.113.7', '8.8.8.8', '2606:4700::1111', '::ffff:8.8.8.8']) {
+    for (const address of [
+      '1.1.1.1',
+      '8.8.8.8',
+      '2606:4700::1111',
+      '2a00:1450:4001::1',
+      '::ffff:8.8.8.8',
+      '64:ff9b::808:808', // well-known NAT64 of 8.8.8.8
+      '192.31.196.1', // AS112: special-purpose but globally reachable
+    ]) {
       const { notifier, sent } = make({ resolve: () => Promise.resolve([address]) });
       await expect(notifier.notify(EVENT)).resolves.toMatchObject({ status: 200 });
       expect(sent).toHaveLength(1);
@@ -365,7 +462,7 @@ describe('mock-webhook SSRF rules', () => {
 
   it('rule: connect to the vetted IP, keep the host for SNI and Host, no second lookup', async () => {
     const lookups: string[] = [];
-    const answers = [['203.0.113.7'], ['127.0.0.1']]; // a rebinding attacker flips the second answer
+    const answers = [['8.8.8.8'], ['127.0.0.1']]; // a rebinding attacker flips the second answer
     const { notifier, sent } = make({
       url: 'https://hooks.example.se:8443/in?x=1',
       resolve: (h) => {
@@ -375,7 +472,7 @@ describe('mock-webhook SSRF rules', () => {
     });
     await notifier.notify(EVENT);
     expect(lookups).toEqual(['hooks.example.se']);
-    expect(sent[0]?.ip).toBe('203.0.113.7');
+    expect(sent[0]?.ip).toBe('8.8.8.8');
     expect(sent[0]?.hostname).toBe('hooks.example.se');
     expect(sent[0]?.port).toBe(8443);
     expect(sent[0]?.path).toBe('/in?x=1');
