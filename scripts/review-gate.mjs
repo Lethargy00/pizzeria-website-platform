@@ -22,6 +22,17 @@ export const RICHTEXT_PATHS = [
   'scripts/test/*html-sink*', // the fixtures that prove (b) and (d) work
 ];
 
+/**
+ * pnpm also reads a manifest written as package.yaml or package.json5 (#120). The gate cannot
+ * parse those without a dependency, so wherever one appears it always counts as a dependency
+ * change (fail closed) and is never eligible for the field-by-field proof below.
+ */
+export const ALT_MANIFESTS = [
+  'package.{yaml,json5}',
+  'playground/package.{yaml,json5}',
+  'packages/*/package.{yaml,json5}',
+];
+
 /** Always a dependency change when touched: the lockfile and the root / playground manifests. */
 export const DEPENDENCY_PATHS = [
   'pnpm-lock.yaml',
@@ -29,6 +40,7 @@ export const DEPENDENCY_PATHS = [
   'playground/package.json',
   'pnpm-workspace.yaml',
   '.npmrc',
+  ...ALT_MANIFESTS,
 ];
 
 /** Workspace package manifests: a dependency change only if a DEPENDENCY_FIELDS value differs. */
@@ -37,6 +49,9 @@ export const PACKAGE_MANIFESTS = 'packages/*/package.json';
 /**
  * Top-level package.json fields that decide what gets installed, how, or with which engine.
  * The #93 list, plus the fields next to it that pnpm or npm also read when installing.
+ * #120 added: bin (pnpm links it into dependents' node_modules/.bin, so it changes PATH),
+ * name and version (they decide what a workspace: range resolves to), and devEngines, os,
+ * cpu, libc (they decide whether and where a package installs).
  */
 export const DEPENDENCY_FIELDS = [
   'dependencies',
@@ -53,6 +68,13 @@ export const DEPENDENCY_FIELDS = [
   'bundledDependencies',
   'resolutions',
   'workspaces',
+  'bin',
+  'name',
+  'version',
+  'devEngines',
+  'os',
+  'cpu',
+  'libc',
 ];
 
 /** Install-time lifecycle scripts: pnpm install runs these, so they count as dependency changes. */
@@ -75,11 +97,21 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Which dependency fields differ between two package.json texts. Fails closed: if either side
- * is not a string, does not parse, or is not a JSON object, the answer is "changed".
- * Key order counts as a change too (JSON.stringify), which can only ask for more review.
+ * is not a string, does not parse, or is not a JSON object, or the comparison itself throws
+ * (JSON.stringify raises RangeError on very deep nesting, #120), the answer is "changed".
+ * Key order inside a field counts as a change too (JSON.stringify), which can only ask for
+ * more review; the order of the top-level fields does not. Never throws.
  * @returns {{ changed: boolean, why: string }}
  */
 export function dependencyFieldsChanged(baseText, headText) {
+  try {
+    return compareDependencyFields(baseText, headText);
+  } catch (e) {
+    return { changed: true, why: `comparison failed (${e?.name ?? 'error'})` };
+  }
+}
+
+function compareDependencyFields(baseText, headText) {
   if (typeof baseText !== 'string' || typeof headText !== 'string')
     return { changed: true, why: 'content unavailable' };
   let base, head;
@@ -113,6 +145,7 @@ export const MATRIX = [
         'scripts/boundaries.json',
         'docs/adr/**',
         'packages/*/package.json',
+        'packages/*/package.{yaml,json5}', // #120: pnpm reads these as the manifest too
       ]),
   },
   {
@@ -253,9 +286,20 @@ export async function prFilesAndLabels(repo, pr) {
   return { files, apiFiles, labels: issue.labels.map((l) => l.name), body: issue.body ?? '' };
 }
 
-/** The contents API inlines files up to 1 MB as base64; anything else is "unavailable". */
-export function decodeContents(entry) {
+/**
+ * The contents API inlines files up to 1 MB as base64; anything else is "unavailable".
+ * With `expect`, the entry must also be for exactly that path (and blob sha, when given):
+ * the API answers a symlink with its target's content, so an entry for another path is
+ * not the file the PR changed (#120).
+ * @param {any} entry contents API response
+ * @param {{ path?: string, sha?: string }} [expect]
+ */
+export function decodeContents(entry, expect = {}) {
   if (entry?.type !== 'file' || entry.encoding !== 'base64' || typeof entry.content !== 'string')
+    return undefined;
+  if ('path' in expect && (typeof expect.path !== 'string' || entry.path !== expect.path))
+    return undefined;
+  if ('sha' in expect && (typeof expect.sha !== 'string' || entry.sha !== expect.sha))
     return undefined;
   return Buffer.from(entry.content, 'base64').toString('utf8');
 }
@@ -265,6 +309,8 @@ export function decodeContents(entry) {
  * base and at the PR head. Returns the paths PROVEN unchanged, plus a note per manifest.
  * Fails closed: an added, removed, renamed or copied manifest, a missing merge base, or any
  * fetch / decode / parse problem leaves the path out of the set, so the dependency row applies.
+ * #120: the head content must be the blob the files list names (same path and sha), and the
+ * base content must be for the same path, so a symlink cannot stand in for the manifest.
  * @param {(path: string) => Promise<any>} api GitHub REST GET (injected for tests)
  * @returns {Promise<{ noDependencyChange: Set<string>, notes: string[] }>}
  */
@@ -305,7 +351,12 @@ export async function manifestProofs(repo, pr, apiFiles, api = gh) {
         api(`repos/${repo}/contents/${enc}?ref=${mergeBase}`),
         api(`repos/${repo}/contents/${enc}?ref=${head}`),
       ]);
-      r = dependencyFieldsChanged(decodeContents(b), decodeContents(h));
+      const bt = decodeContents(b, { path });
+      const ht = decodeContents(h, { path, sha: f.sha });
+      r =
+        bt === undefined || ht === undefined
+          ? { changed: true, why: 'content unavailable or not the listed path and blob' }
+          : dependencyFieldsChanged(bt, ht);
     } catch (e) {
       r = { changed: true, why: e.message };
     }
