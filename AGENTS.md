@@ -243,8 +243,12 @@ The `review-gate` CI job reads a PR's changed paths and labels, compares them wi
 - the workflows: `/.github/workflows/` and `/.github/CODEOWNERS`
 - the gate scripts: `/scripts/review-gate.mjs`, `/scripts/touches-guard.mjs`, every `/scripts/*-guard.mjs`, and `/scripts/lib/`, which the gates share
 - the rich-text paths in the `richtext` row above
+- the dependency paths: `/pnpm-lock.yaml`, `/package.json`, `/playground/package.json`, `/pnpm-workspace.yaml`, `/.npmrc`, `/.pnpmfile.cjs`, `/.pnpmfile.mjs`, the alternate manifests (`package.yaml` and `package.json5` at the root, in `/playground/` and in `/packages/*/`), and `/packages/*/package.json` (the `DEPENDENCY_PATHS`, `ALT_MANIFESTS` and `PACKAGE_MANIFESTS` constants in `scripts/review-gate.mjs`)
+- the other code paths in the `security` row: the form, sanitizer, CSP and headers paths, `/packages/cli/src/build/`, `/packages/cli/src/isolation/` and `**/.env.example`
 
-Every CODEOWNERS entry currently maps to the one shared GitHub account, so the comment after each entry, not the account, says which role must review. The CODEOWNERS section and the matrix do not match exactly. `scripts/lib/` is marked security-reviewed in CODEOWNERS but is not listed in the `security` row, so a change that touches only `scripts/lib/` does not make `review-gate` require `approved:security`. Reviewers must still check it by hand.
+`scripts/test/review-gate-richtext.test.mjs` imports those constants and fails if any dependency path or `security`-row glob resolves to a CODEOWNERS line without a security note, or if an owner is anything but `@Lethargy00`.
+
+Every CODEOWNERS entry currently maps to the one shared GitHub account, so the comment after each entry, not the account, says which role must review. The CODEOWNERS section is wider than the `security` row in one way: it also marks the `richtext` row paths, which `review-gate` enforces through the `richtext` row instead.
 
 ## 11. Comment formats (copy exactly)
 

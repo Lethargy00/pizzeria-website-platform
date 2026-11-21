@@ -4,7 +4,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { evaluate, MATRIX, RICHTEXT_PATHS } from '../review-gate.mjs';
+import {
+  ALT_MANIFESTS,
+  DEPENDENCY_PATHS,
+  evaluate,
+  MATRIX,
+  PACKAGE_MANIFESTS,
+  RICHTEXT_PATHS,
+} from '../review-gate.mjs';
 import { globToRegExp } from '../lib/glob.mjs';
 
 const missing = (files, labels) =>
@@ -131,39 +138,52 @@ test('CODEOWNERS: the rest of @pwp/core and ordinary scripts are not marked for 
   assert.doesNotMatch(ownerOf('scripts/typecheck.mjs').note, /security/);
 });
 
-// --- every dependency path has a CODEOWNERS line with a security note (#160) -----------------
-// review-gate.mjs treats DEPENDENCY_PATHS (which include ALT_MANIFESTS) and PACKAGE_MANIFESTS
-// as dependency paths needing approved:security, so CODEOWNERS must say so. The lists are read
-// from the source text so they cannot drift.
-const gateSrc = readFileSync(new URL('../review-gate.mjs', import.meta.url), 'utf8');
-const stringsOf = (name) => {
-  const block = new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\];`).exec(gateSrc);
-  return block
-    ? [...block[1].replace(/\/\/.*$/gm, '').matchAll(/'([^']+)'/g)].map((m) => m[1])
-    : [];
-};
-const altGlobs = stringsOf('ALT_MANIFESTS');
-const depGlobs = stringsOf('DEPENDENCY_PATHS');
-const packageManifests = /export const PACKAGE_MANIFESTS = '([^']+)'/.exec(gateSrc)?.[1];
+// --- every dependency path and security-row glob has a CODEOWNERS security note (#160, #175) --
+// The globs come from the constants review-gate.mjs exports (never parsed as text), so a new
+// entry, a spread of another constant or a wider PACKAGE_MANIFESTS glob is checked at once.
+const securityRow = MATRIX.find((r) => r.id === 'security');
+// The security row keeps its globs inside the `when` closure and review-gate.mjs does not
+// export them, so read them from the function's source (single, double or backtick quotes).
+// The "import" test below checks that every recovered glob really triggers the row.
+// Follow-up: export the list from review-gate.mjs and import it here.
+const rowGlobs = [...securityRow.when.toString().matchAll(/(['"`])((?:(?!\1).)+)\1/g)]
+  .map((m) => m[2])
+  .filter((g) => g !== 'security:sensitive');
+
 const expandBraces = (glob) => {
   const braces = /\{([^}]+)\}/.exec(glob);
   return braces ? braces[1].split(',').map((x) => glob.replace(braces[0], x)) : [glob];
 };
+/** A concrete path that the glob matches: `**` becomes two segments, `*` one name. */
+const sampleOf = (glob) => glob.replaceAll('**', 'x/y').replaceAll('*', 'x');
 
-test('ALT_MANIFESTS and DEPENDENCY_PATHS were parsed from review-gate.mjs', () => {
-  assert.ok(altGlobs.length >= 3, `parsed ${JSON.stringify(altGlobs)}`);
-  assert.ok(depGlobs.length >= 7, `parsed ${JSON.stringify(depGlobs)}`);
-  assert.ok(packageManifests, 'PACKAGE_MANIFESTS not found');
+test('CODEOWNERS: every owner everywhere is exactly @Lethargy00', () => {
+  assert.ok(entries.length > 30, `parsed ${entries.length} entries`);
+  for (const e of entries) assert.deepEqual(e.owners, ['@Lethargy00'], `entry "${e.re}"`);
 });
 
-const allDependencyGlobs = [...new Set([...altGlobs, ...depGlobs, packageManifests])].filter(
-  Boolean,
-);
-for (const g of allDependencyGlobs.flatMap(expandBraces)) {
-  test(`CODEOWNERS: dependency path ${g} is owned with security review`, () => {
-    const e = ownerOf(g.replaceAll('*', 'x'));
-    assert.ok(e, `no CODEOWNERS entry matches ${g}`);
-    assert.ok(e.owners.length > 0, `${g} has no owner`);
-    assert.match(e.note, /\bsecurity\b/, `${g} resolves to "#${e.note}"`);
+test('review-gate constants were imported and recovered', () => {
+  assert.ok(ALT_MANIFESTS.length >= 3, JSON.stringify(ALT_MANIFESTS));
+  assert.ok(DEPENDENCY_PATHS.length >= 7, JSON.stringify(DEPENDENCY_PATHS));
+  assert.equal(typeof PACKAGE_MANIFESTS, 'string');
+  assert.ok(rowGlobs.length >= 20, `recovered ${rowGlobs.length} security-row globs`);
+  // Each recovered glob really is a security-row glob: its sample path triggers the row.
+  for (const g of rowGlobs)
+    for (const g2 of expandBraces(g))
+      assert.ok(securityRow.when(sampleOf(g2), []), `${g} → ${sampleOf(g2)} not in the row`);
+  // A spread keeps ALT_MANIFESTS inside DEPENDENCY_PATHS.
+  for (const g of ALT_MANIFESTS) assert.ok(DEPENDENCY_PATHS.includes(g), g);
+});
+
+const allGlobs = [
+  ...new Set([...DEPENDENCY_PATHS, ...ALT_MANIFESTS, PACKAGE_MANIFESTS, ...rowGlobs]),
+];
+for (const g of allGlobs.flatMap(expandBraces)) {
+  test(`CODEOWNERS: ${g} is owned with a security note`, () => {
+    const path = sampleOf(g);
+    const e = ownerOf(path);
+    assert.ok(e, `no CODEOWNERS entry matches ${path}`);
+    assert.deepEqual(e.owners, ['@Lethargy00'], `${path} owners`);
+    assert.match(e.note, /\bsecurity\b/, `${path} resolves to "#${e.note}"`);
   });
 }
