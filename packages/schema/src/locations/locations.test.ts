@@ -105,6 +105,39 @@ describe('locationsSchema issues', () => {
     ]);
   });
 
+  it('skips ids that LocationId already rejected: one issue per invalid id', () => {
+    const bad = { ...minimalLocation, id: 'A B' };
+    expect(issues({ locations: [bad, bad] })).toEqual([
+      { path: ['locations', 0, 'id'], code: 'invalid_format' },
+      { path: ['locations', 1, 'id'], code: 'invalid_format' },
+    ]);
+  });
+
+  it('still reports a repeated valid id when other fields fail', () => {
+    const badPhone = { ...minimalLocation, phone: '08-123' };
+    expect(issues({ locations: [minimalLocation, badPhone] })).toEqual([
+      { path: ['locations', 1, 'phone'], code: 'invalid_format' },
+      { path: ['locations', 1, 'id'], code: 'custom' },
+    ]);
+  });
+
+  it.each([
+    [{ lat: 99, lng: 18 }, ['locations', 0, 'geo', 'lat'], 'too_big'],
+    [{ lat: 59 }, ['locations', 0, 'geo', 'lng'], 'invalid_type'],
+    ['59.3,18.0', ['locations', 0, 'geo'], 'invalid_type'],
+  ])('gives an invalid geo %j on a click-to-load map exactly one issue', (geo, path, code) => {
+    expect(issues({ locations: [{ ...fullLocation, geo }] })).toEqual([{ path, code }]);
+  });
+
+  it('does not crash on entries that are not objects', () => {
+    expect(issues({ locations: [null, minimalLocation] })).toEqual([
+      { path: ['locations', 0], code: 'invalid_type' },
+    ]);
+    expect(issues({ locations: [{ ...minimalLocation, map: null }] })).toEqual([
+      { path: ['locations', 0, 'map'], code: 'invalid_type' },
+    ]);
+  });
+
   it('reports a click-to-load map without geo at geo', () => {
     expect(issues({ locations: [omit(fullLocation, 'geo')] })).toEqual([
       { path: ['locations', 0, 'geo'], code: 'custom' },

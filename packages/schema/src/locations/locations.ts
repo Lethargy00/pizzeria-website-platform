@@ -115,6 +115,8 @@ export function locationSchema(ctx: LocaleContext) {
     /** Where the location delivers, as free text (DECISIONS #34). No zones in v1. */
     deliveryArea: localizedStringFor(ctx.locales).optional(),
   }).superRefine((location, issues) => {
+    // Fires only when `geo` is absent, which no primitive rejects; a present but invalid `geo`
+    // gets only `GeoPoint`'s own issue.
     if (location.map.mode === 'click-to-load' && location.geo === undefined) {
       issues.addIssue({
         code: 'custom',
@@ -138,6 +140,9 @@ export function locationsSchema(ctx: LocaleContext) {
   }).superRefine((file, issues) => {
     const seen = new Set<string>();
     file.locations.forEach((location, index) => {
+      // A format failure inside an entry does not stop this check (zod 4), so skip ids that
+      // `LocationId` already rejected: they get their own issue, never a second one here.
+      if (!LocationId.safeParse(location.id).success) return;
       if (seen.has(location.id)) {
         issues.addIssue({
           code: 'custom',
