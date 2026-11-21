@@ -12,6 +12,9 @@
  *   capped; when the cap is reached with no expired key to drop, `hit` rejects with
  *   `unavailable` (callers fail closed, #50) rather than evicting a live key, which would let
  *   an attacker reset their own counter by flooding other keys.
+ * - Fails closed on a bad clock: a `now()` result that is not a finite, non-negative number
+ *   rejects with `unavailable` and records nothing (#159). Bad key or window types reject with
+ *   `invalid_input` before the clock is read.
  * - JavaScript is single-threaded and `hit` has no `await` between read and write, so it is
  *   atomic per key.
  */
@@ -72,13 +75,22 @@ export function createMemoryRateLimitStore(
     for (const [k, e] of entries) if (e.expiresAt <= t) entries.delete(k);
   }
 
-  function decide(key: RateLimitKey, window: RateLimitWindow): RateLimitResult {
-    if (!KEY_RE.test(key)) throw invalidInput('invalid rate-limit key');
-    const { limit, windowSeconds } = window;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+  function decide(key: unknown, window: unknown): RateLimitResult {
+    // Type checks come first, so a non-string key or a non-object window is `invalid_input`
+    // (not retryable) instead of a TypeError that would surface as `unavailable` (#159).
+    if (typeof key !== 'string' || !KEY_RE.test(key)) throw invalidInput('invalid rate-limit key');
+    if (typeof window !== 'object' || window === null) throw invalidInput('invalid window');
+    const { limit, windowSeconds } = window as Partial<RateLimitWindow>;
+    if (
+      typeof limit !== 'number' ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > MAX_LIMIT
+    ) {
       throw invalidInput('invalid limit');
     }
     if (
+      typeof windowSeconds !== 'number' ||
       !Number.isSafeInteger(windowSeconds) ||
       windowSeconds < 1 ||
       windowSeconds > MAX_WINDOW_SECONDS
@@ -86,6 +98,11 @@ export function createMemoryRateLimitStore(
       throw invalidInput('invalid window');
     }
     const t = now();
+    // A NaN/Infinity clock makes every logged hit look outside the window, which would allow
+    // every hit (fail open). Reject before any entry is created or changed (#159).
+    if (typeof t !== 'number' || !Number.isFinite(t) || t < 0) {
+      throw new AdapterError('rateLimit', NAME, 'unavailable', 'rate-limit clock failure');
+    }
     const windowMs = windowSeconds * 1000;
 
     let entry = entries.get(key);

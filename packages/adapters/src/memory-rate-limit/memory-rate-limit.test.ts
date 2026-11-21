@@ -243,6 +243,137 @@ describe('memory-rate-limit', () => {
     throw new Error('expected rejection');
   });
 
+  describe('a clock that returns a bad value fails closed (#159)', () => {
+    const bad: readonly [string, number][] = [
+      ['NaN', Number.NaN],
+      ['Infinity', Number.POSITIVE_INFINITY],
+      ['-Infinity', Number.NEGATIVE_INFINITY],
+      ['negative', -1],
+    ];
+    for (const [label, value] of bad) {
+      it(`now() = ${label}: never allows, records nothing, fixed message, no cause`, async () => {
+        const s = createMemoryRateLimitStore({ now: () => value });
+        const w = { limit: 1, windowSeconds: 60 };
+        for (let i = 0; i < 5; i++) {
+          const e: unknown = await s.hit(key('a'), w).then(
+            () => undefined,
+            (x: unknown) => x,
+          );
+          expect(e).toBeInstanceOf(AdapterError);
+          expect(e).toMatchObject({
+            code: 'unavailable',
+            kind: 'rateLimit',
+            message: 'rate-limit clock failure',
+          });
+          expect((e as Error).cause).toBeUndefined();
+        }
+        expect(s.size).toBe(0);
+      });
+    }
+
+    it('a non-number now() result fails closed the same way', async () => {
+      const s = createMemoryRateLimitStore({ now: () => '1000' as unknown as number });
+      await expect(s.hit(key('a'), W)).rejects.toMatchObject({
+        code: 'unavailable',
+        message: 'rate-limit clock failure',
+      });
+      expect(s.size).toBe(0);
+    });
+
+    it('a bad tick does not disturb an existing counter', async () => {
+      let t = 1_000_000;
+      const s = createMemoryRateLimitStore({ now: () => t });
+      const w = { limit: 1, windowSeconds: 60 };
+      expect((await s.hit(key('a'), w)).allowed).toBe(true);
+      t = Number.NaN;
+      await expect(s.hit(key('a'), w)).rejects.toMatchObject({ code: 'unavailable' });
+      t = 1_000_001;
+      expect((await s.hit(key('a'), w)).allowed).toBe(false);
+      expect(s.size).toBe(1);
+    });
+
+    it('now() = 0 is a valid time', async () => {
+      const s = createMemoryRateLimitStore({ now: () => 0 });
+      expect((await s.hit(key('a'), W)).allowed).toBe(true);
+    });
+  });
+
+  describe('bad key and window types reject as invalid_input (#159)', () => {
+    const badKeys: readonly [string, unknown][] = [
+      ['null', null],
+      ['undefined', undefined],
+      ['number', 42],
+      ['object', {}],
+      [
+        'object whose toString throws',
+        {
+          toString() {
+            throw new Error('203.0.113.7');
+          },
+        },
+      ],
+      ['String object', new String(`a:${'0'.repeat(64)}`)],
+    ];
+    for (const [label, k] of badKeys) {
+      it(`key = ${label}`, async () => {
+        let clockRead = false;
+        const s = createMemoryRateLimitStore({
+          now: () => {
+            clockRead = true;
+            return 0;
+          },
+        });
+        const e: unknown = await s.hit(k as RateLimitKey, W).catch((x: unknown) => x);
+        expect(e).toBeInstanceOf(AdapterError);
+        expect(e).toMatchObject({
+          code: 'invalid_input',
+          retryable: false,
+          message: 'invalid rate-limit key',
+        });
+        expect((e as Error).message).not.toContain('203.0.113.7');
+        expect((e as Error).cause).toBeUndefined();
+        expect(clockRead).toBe(false);
+        expect(s.size).toBe(0);
+      });
+    }
+
+    const badWindows: readonly [string, unknown][] = [
+      ['null', null],
+      ['undefined', undefined],
+      ['number', 60],
+      ['string', '60'],
+      ['empty object', {}],
+      ['array', [1, 60]],
+      ['string fields', { limit: '1', windowSeconds: '60' }],
+    ];
+    for (const [label, w] of badWindows) {
+      it(`window = ${label}`, async () => {
+        let clockRead = false;
+        const s = createMemoryRateLimitStore({
+          now: () => {
+            clockRead = true;
+            return 0;
+          },
+        });
+        const e: unknown = await s
+          .hit(key('a'), w as { limit: number; windowSeconds: number })
+          .catch((x: unknown) => x);
+        expect(e).toBeInstanceOf(AdapterError);
+        expect(e).toMatchObject({ code: 'invalid_input', retryable: false, kind: 'rateLimit' });
+        expect((e as Error).cause).toBeUndefined();
+        expect(clockRead).toBe(false);
+        expect(s.size).toBe(0);
+      });
+    }
+
+    it('key type is checked before the window', async () => {
+      const s = createMemoryRateLimitStore();
+      await expect(
+        s.hit(null as unknown as RateLimitKey, null as unknown as typeof W),
+      ).rejects.toMatchObject({ code: 'invalid_input', message: 'invalid rate-limit key' });
+    });
+  });
+
   it('factory declares no env vars and builds a store', () => {
     expect(factory.name).toBe('memory-rate-limit');
     expect(factory.env).toEqual([]);
