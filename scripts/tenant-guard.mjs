@@ -18,6 +18,10 @@ export const ALLOWED_EXT = new Set([
   '.woff2',
 ]);
 const ALLOWED_NAMES = new Set(['.gitkeep', 'README.md']);
+// The only folders allowed directly inside a tenant folder (PROMPT.md §4 layout). Matched exactly and
+// case-sensitively: on a case-insensitive checkout "Assets/" would resolve to "assets/" yet escape
+// every assets/ rule below.
+export const TENANT_FOLDERS = new Set(['assets', 'content']);
 export const FORBIDDEN_NAMES = [
   /^package\.json$/i,
   /^package-lock\.json$/i,
@@ -86,6 +90,19 @@ export const CONTENT_RULES = [
   },
 ];
 
+/**
+ * Escapes control characters (JSON style) so a file name or file content can never add lines to the
+ * CI log, e.g. a fake "::error::" workflow command. Everything printed from a tenant goes through this.
+ */
+export function safe(text) {
+  return JSON.stringify(String(text))
+    .slice(1, -1)
+    .replace(
+      /[\u007f-\u009f\u2028\u2029]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+    );
+}
+
 function ext(path) {
   const base = path.split('/').pop() ?? '';
   const i = base.lastIndexOf('.');
@@ -107,8 +124,10 @@ function suggest(name) {
 export function checkTenants(root) {
   const problems = [];
   for (const e of walk(root)) {
-    const name = e.path.split('/').pop();
-    const at = `tenants/${e.path}`;
+    const parts = e.path.split('/');
+    const rawName = parts[parts.length - 1];
+    const name = safe(rawName);
+    const at = `tenants/${safe(e.path)}`;
     if (e.isSymlink) {
       problems.push({
         path: at,
@@ -117,7 +136,7 @@ export function checkTenants(root) {
       });
       continue;
     }
-    if (FORBIDDEN_NAMES.some((re) => re.test(name))) {
+    if (FORBIDDEN_NAMES.some((re) => re.test(rawName))) {
       problems.push({
         path: at,
         rule: 'forbidden-file',
@@ -127,26 +146,35 @@ export function checkTenants(root) {
     }
     if (
       ASSETS_PATH.test(e.path) &&
-      !ALLOWED_NAMES.has(name) &&
-      (!ASSET_SEGMENT.test(name) || name.includes('..'))
+      !ALLOWED_NAMES.has(rawName) &&
+      (!ASSET_SEGMENT.test(rawName) || rawName.includes('..'))
     ) {
       problems.push({
         path: at,
         rule: 'asset-name',
-        message: `"${name}" is not a valid asset name. Names under assets/ must be lowercase letters, digits, "-", "_" or "." and start with a letter or digit (no spaces, uppercase or non-ASCII), or no AssetRef can point to it. Rename it, e.g. "${suggest(name)}".`,
+        message: `"${name}" is not a valid asset name. Names under assets/ must be lowercase letters, digits, "-", "_" or "." and start with a letter or digit (no spaces, uppercase or non-ASCII), or no AssetRef can point to it. Rename it, e.g. "${suggest(rawName)}".`,
       });
       continue;
     }
-    if (e.isDir) continue;
-    if (!ALLOWED_NAMES.has(name) && !ALLOWED_EXT.has(ext(name))) {
+    if (e.isDir) {
+      if (parts.length === 2 && !TENANT_FOLDERS.has(rawName)) {
+        problems.push({
+          path: at,
+          rule: 'tenant-folder',
+          message: `"${name}" is not an allowed folder in a tenant. Allowed, spelled exactly like this: ${[...TENANT_FOLDERS].join(', ')}. Rename or remove it (on a case-insensitive checkout "Assets" would also resolve to "assets").`,
+        });
+      }
+      continue;
+    }
+    if (!ALLOWED_NAMES.has(rawName) && !ALLOWED_EXT.has(ext(rawName))) {
       problems.push({
         path: at,
         rule: 'file-type',
-        message: `File type "${ext(name) || name}" is not allowed. Allowed: ${[...ALLOWED_EXT].join(' ')}.`,
+        message: `File type "${safe(ext(rawName)) || name}" is not allowed. Allowed: ${[...ALLOWED_EXT].join(' ')}.`,
       });
       continue;
     }
-    if (TEXT_EXT.has(ext(name))) {
+    if (TEXT_EXT.has(ext(rawName))) {
       if (e.size > MAX_TEXT_BYTES) {
         problems.push({
           path: at,
@@ -164,7 +192,7 @@ export function checkTenants(root) {
           problems.push({
             path: `${at}:${line}`,
             rule: rule.id,
-            message: `${rule.msg} Found: ${JSON.stringify((lines[line - 1] ?? '').trim().slice(0, 80))}`,
+            message: `${rule.msg} Found: "${safe((lines[line - 1] ?? '').trim().slice(0, 80))}"`,
           });
         }
       }
@@ -178,6 +206,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const problems = checkTenants(root);
   if (problems.length) {
     console.error(`tenant-guard: ${problems.length} problem(s)\n`);
+    // Every path and message is escaped with safe() when it is built (names come from tenants).
     for (const p of problems) console.error(`  ✗ ${p.path}  [${p.rule}]\n    ${p.message}\n`);
     process.exit(1);
   }
