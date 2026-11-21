@@ -7,6 +7,15 @@ import { pathToFileURL } from 'node:url';
 import { matchesAny } from './lib/glob.mjs';
 
 /**
+ * #162: every reviewed row matches paths without regard to case. On a case-insensitive
+ * filesystem (macOS, Windows) a checkout of `.PNPMFILE.cjs`, `.NPMRC` or `Package.json` is the
+ * file pnpm reads, so a case variant must need the same approvals as the exact path. Matching
+ * more paths than needed only asks for more review (fail closed). manifestProofs stays
+ * case-sensitive, so a case variant of a workspace manifest is never proven unchanged.
+ */
+const reviewed = (f, globs) => matchesAny(f, globs, { nocase: true });
+
+/**
  * ADR 0002 Enforcement (c), #81: the rich-text chokepoint and the checks that guard it.
  * Every change here needs approved:security, whatever other rows say (#93 narrowed the
  * dependency row; this row keeps packages/core/package.json, which holds the ./richtext
@@ -150,7 +159,7 @@ export const MATRIX = [
     approval: 'approved:architect',
     why: 'contract, public API or package boundary change',
     when: (f) =>
-      matchesAny(f, [
+      reviewed(f, [
         'packages/schema/**',
         'packages/*/src/contracts/**',
         'packages/adapters/src/interfaces/**',
@@ -167,8 +176,8 @@ export const MATRIX = [
     // #93: a packages/*/package.json is skipped only when the gate has PROVEN that none of its
     // DEPENDENCY_FIELDS changed (ctx.noDependencyChange). Without that proof it matches, as before.
     when: (f, _labels, ctx = {}) =>
-      matchesAny(f, DEPENDENCY_PATHS) ||
-      (matchesAny(f, [PACKAGE_MANIFESTS]) && !ctx.noDependencyChange?.has(f)),
+      reviewed(f, DEPENDENCY_PATHS) ||
+      (reviewed(f, [PACKAGE_MANIFESTS]) && !ctx.noDependencyChange?.has(f)),
   },
   {
     id: 'security',
@@ -176,7 +185,7 @@ export const MATRIX = [
     why: 'security-sensitive path',
     when: (f, labels) =>
       labels.includes('security:sensitive') ||
-      matchesAny(f, [
+      reviewed(f, [
         'packages/functions/**',
         'packages/adapters/**',
         'packages/ui/src/components/*Form*/**',
@@ -205,19 +214,14 @@ export const MATRIX = [
     id: 'richtext',
     approval: 'approved:security',
     why: 'rich-text chokepoint or its checks (ADR 0002 (c))',
-    when: (f) => matchesAny(f, RICHTEXT_PATHS),
+    when: (f) => reviewed(f, RICHTEXT_PATHS),
   },
   {
     id: 'a11y-perf',
     approval: 'approved:a11y-perf',
     why: 'user-visible change',
     when: (f) =>
-      matchesAny(f, [
-        'packages/ui/**',
-        'packages/themes/**',
-        'packages/tokens/**',
-        'playground/**',
-      ]),
+      reviewed(f, ['packages/ui/**', 'packages/themes/**', 'packages/tokens/**', 'playground/**']),
   },
 ];
 
