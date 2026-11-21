@@ -5,21 +5,22 @@
  * PII: recipients, reply-to, subject and body all may contain personal data (`@pii`).
  */
 
-import type { AdapterCallOptions } from './index.js';
+import type { Email, LocaleCode } from '@pwp/schema/primitives';
+import type { EmailAdapterName } from '@pwp/schema/adapters';
+import type { AdapterCallOptions, AdapterEnvVarName } from './index.js';
 
-/** Closed set of email adapter names (= folder names). Moves to `@pwp/schema/adapters` in #64. */
-export const EMAIL_ADAPTER_NAMES = ['mock-email'] as const;
-export type EmailAdapterName = (typeof EMAIL_ADAPTER_NAMES)[number];
+/** Closed set of email adapter names (= folder names). Canonical in `@pwp/schema/adapters` (#64). */
+export { EMAIL_ADAPTER_NAMES, type EmailAdapterName } from '@pwp/schema/adapters';
 
 /** Env vars shared by every email adapter. Provider adapters add their own `EMAIL_*` vars. */
 export const EMAIL_ENV = {
   /** Sender address, e.g. `"Pizzeria Exempel" <no-reply@example.se>`. Not secret. Required. */
   from: 'EMAIL_FROM',
-} as const;
+} as const satisfies Record<string, AdapterEnvVarName<'email'>>;
 
 export interface EmailAddress {
   /** @pii Address only, no display name, already validated by `@pwp/schema` `Email` (#22). */
-  readonly address: string;
+  readonly address: Email;
   /** @pii Optional display name. Adapters strip CR/LF before putting it in a header. */
   readonly name?: string;
 }
@@ -40,8 +41,8 @@ export interface EmailMessage {
   readonly subject: string;
   /** @pii Plain text body, max 20 000 characters. */
   readonly text: string;
-  /** Language of the message, for the `Content-Language` header. */
-  readonly locale: 'sv' | 'en';
+  /** Language of the message, for the `Content-Language` header (`@pwp/schema` `LocaleCode`). */
+  readonly locale: LocaleCode;
   /**
    * Stable per logical message (e.g. the form submission id). Retries reuse it; adapters that
    * support it pass it to the provider so a retried send is delivered once. Not PII.

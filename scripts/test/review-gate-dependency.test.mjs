@@ -9,6 +9,7 @@ import {
   decodeContents,
   manifestProofs,
   DEPENDENCY_FIELDS,
+  DEPENDENCY_PATHS,
   INSTALL_SCRIPTS,
 } from '../review-gate.mjs';
 
@@ -37,11 +38,11 @@ test('deps: an exports-only change is not a dependency change', () => {
   assert.equal(r.changed, false);
 });
 
-test('deps: ordinary script, description and version edits are not dependency changes', () => {
+test('deps: ordinary script, description and keywords edits are not dependency changes', () => {
   const head = with_({
     scripts: { test: 'vitest run --coverage' },
     description: 'x',
-    version: '1.0.1',
+    keywords: ['pizza'],
   });
   assert.equal(dependencyFieldsChanged(j(BASE), head).changed, false);
 });
@@ -59,6 +60,14 @@ for (const field of [
   'pnpm',
   'engines',
   'packageManager',
+  // #120
+  'bin',
+  'name',
+  'version',
+  'devEngines',
+  'os',
+  'cpu',
+  'libc',
 ]) {
   test(`deps: a change to ${field} is a dependency change`, () => {
     const r = dependencyFieldsChanged(j(BASE), with_({ [field]: { added: '1.0.0' } }));
@@ -79,6 +88,77 @@ test('deps: the #93 fields are all in DEPENDENCY_FIELDS', () => {
     'packageManager',
   ])
     assert.ok(DEPENDENCY_FIELDS.includes(f), f);
+});
+
+test('deps: the #120 fields are all in DEPENDENCY_FIELDS', () => {
+  for (const f of ['bin', 'name', 'version', 'devEngines', 'os', 'cpu', 'libc'])
+    assert.ok(DEPENDENCY_FIELDS.includes(f), f);
+});
+
+test('deps: a string bin change (the short form) is a dependency change', () => {
+  const r = dependencyFieldsChanged(with_({ bin: './a.js' }), with_({ bin: './b.js' }));
+  assert.equal(r.changed, true);
+  assert.match(r.why, /\bbin\b/);
+});
+
+test('deps: a version bump of the package itself is a dependency change', () => {
+  const r = dependencyFieldsChanged(with_({ version: '1.0.0' }), with_({ version: '1.0.1' }));
+  assert.equal(r.changed, true);
+  assert.match(r.why, /\bversion\b/);
+});
+
+// #120 item 1: pin the strict comparison. Reordering keys INSIDE a dependency field counts
+// as a change (it can only ask for more review); reordering the top-level fields does not.
+// Do not make the comparison order-insensitive without a decision.
+test('deps: reordered keys inside dependencies count as a change', () => {
+  const base = with_({ dependencies: { a: '1.0.0', b: '2.0.0' } });
+  const head = with_({ dependencies: { b: '2.0.0', a: '1.0.0' } });
+  assert.equal(dependencyFieldsChanged(base, head).changed, true);
+});
+
+test('deps: reordered top-level fields do not count as a change', () => {
+  const reordered = Object.fromEntries(Object.entries(BASE).reverse());
+  assert.notEqual(j(reordered), j(BASE));
+  assert.equal(dependencyFieldsChanged(j(BASE), j(reordered)).changed, false);
+});
+
+// #120 item 6: a comparison that throws (JSON.stringify raises RangeError on deep nesting,
+// depending on the stack size) must answer "changed" rather than throw. The throw is forced
+// so the test does not depend on the Node version's stack size.
+test('deps: a comparison that throws fails closed instead of throwing', () => {
+  const base = j(BASE);
+  const head = with_({ exports: { './x': './x.ts' } }); // would be "not changed"
+  assert.equal(dependencyFieldsChanged(base, head).changed, false);
+  const stringify = JSON.stringify;
+  let r;
+  JSON.stringify = () => {
+    throw new RangeError('Maximum call stack size exceeded');
+  };
+  try {
+    assert.doesNotThrow(() => {
+      r = dependencyFieldsChanged(base, head);
+    });
+  } finally {
+    JSON.stringify = stringify;
+  }
+  assert.equal(r.changed, true);
+  assert.match(r.why, /comparison failed \(RangeError\)/);
+});
+
+// Real deep nesting: never throws, whatever the stack size. Unequal values are always
+// "changed"; equal ones may be "not changed" (compared fine) or "changed" (comparison threw).
+test('deps: very deep nesting never throws', () => {
+  const d = 50000;
+  const deep = `{"dependencies":${'['.repeat(d)}${']'.repeat(d)}}`;
+  let r;
+  assert.doesNotThrow(() => {
+    r = dependencyFieldsChanged(j(BASE), deep);
+  });
+  assert.equal(r.changed, true);
+  assert.doesNotThrow(() => {
+    r = dependencyFieldsChanged(deep, deep);
+  });
+  assert.equal(typeof r.changed, 'boolean');
 });
 
 test('deps: a version bump inside dependencies is a dependency change', () => {
@@ -165,6 +245,38 @@ test('evaluate: the lockfile and the root, playground and workspace files ignore
   }
 });
 
+// #120 item 3: pnpm also reads package.yaml and package.json5. The gate cannot parse them,
+// so they always need the dependency row (fail closed), proof or not.
+for (const f of [
+  'package.yaml',
+  'package.json5',
+  'playground/package.yaml',
+  'playground/package.json5',
+  'packages/schema/package.yaml',
+  'packages/schema/package.json5',
+  'packages/core/package.yaml',
+]) {
+  test(`evaluate: alternative manifest ${f} always needs the dependency row`, () => {
+    const ctx = { noDependencyChange: new Set([f]) };
+    for (const c of [undefined, ctx]) {
+      const r = evaluate([f], ['approved:peer'], c);
+      assert.ok(r.required.has('approved:architect'), f);
+      assert.ok(r.required.has('approved:security'), f);
+      assert.match(r.required.get('approved:security').join('\n'), /dependency change/);
+    }
+  });
+}
+
+test('evaluate: the alternative manifest globs are in DEPENDENCY_PATHS', () => {
+  for (const g of ['packages/*/package.{yaml,json5}', 'package.{yaml,json5}'])
+    assert.ok(DEPENDENCY_PATHS.includes(g), g);
+});
+
+test('evaluate: package.yml (not read by pnpm) and nested package.yaml are not caught by the new globs', () => {
+  for (const f of ['packages/schema/package.yml', 'packages/schema/src/package.yaml'])
+    assert.ok(!evaluate([f], []).required.has('approved:security'), f);
+});
+
 test('evaluate: a proven manifest plus a lockfile change still needs the dependency row', () => {
   assert.deepEqual(missing([P, 'pnpm-lock.yaml'], ['approved:peer'], proven), [
     'approved:architect',
@@ -222,6 +334,21 @@ for (const f of [
 
 // --- decodeContents -----------------------------------------------------------------------
 
+test('decodeContents: with expect, the entry must be for that path and blob', () => {
+  const content = Buffer.from('{"a":1}').toString('base64');
+  const e = { type: 'file', encoding: 'base64', content, path: P, sha: 'd'.repeat(40) };
+  assert.equal(decodeContents(e, { path: P, sha: 'd'.repeat(40) }), '{"a":1}');
+  assert.equal(decodeContents(e, { path: P }), '{"a":1}');
+  assert.equal(decodeContents(e, { path: 'packages/x/target.json' }), undefined);
+  assert.equal(decodeContents(e, { path: P, sha: 'e'.repeat(40) }), undefined);
+  assert.equal(decodeContents(e, { path: P, sha: undefined }), undefined); // no sha listed
+  assert.equal(decodeContents({ ...e, path: undefined }, { path: P }), undefined);
+  assert.equal(
+    decodeContents({ ...e, sha: undefined }, { path: P, sha: 'd'.repeat(40) }),
+    undefined,
+  );
+});
+
 test('decodeContents: decodes an inline base64 file and rejects everything else', () => {
   const content = Buffer.from('{"a":1}').toString('base64');
   assert.equal(decodeContents({ type: 'file', encoding: 'base64', content }), '{"a":1}');
@@ -236,14 +363,23 @@ test('decodeContents: decodes an inline base64 file and rejects everything else'
 const BASE_SHA = 'a'.repeat(40);
 const HEAD_SHA = 'b'.repeat(40);
 const MB_SHA = 'c'.repeat(40);
-const file = (text) => ({
+/** Blob shas the fake API reports: one for every head file, one for every merge-base file. */
+const HEAD_BLOB = '1'.repeat(40);
+const MB_BLOB = '2'.repeat(40);
+const file = (text, path, sha) => ({
   type: 'file',
   encoding: 'base64',
   content: Buffer.from(text).toString('base64'),
+  path,
+  sha,
 });
 
-/** Fake GitHub API: contents[ref][path] is the file text; anything missing throws (like a 404). */
-function fakeApi({ contents = {}, pull, compare } = {}) {
+/**
+ * Fake GitHub API: contents[ref][path] is the file text; anything missing throws (like a 404).
+ * Like the real API, each contents entry carries its path and blob sha. `entry` can rewrite
+ * an entry to model a symlink answer (another path) or a different blob.
+ */
+function fakeApi({ contents = {}, pull, compare, entry = (e) => e } = {}) {
   const calls = [];
   const api = async (path) => {
     calls.push(path);
@@ -256,11 +392,17 @@ function fakeApi({ contents = {}, pull, compare } = {}) {
     const m = path.match(/^repos\/o\/r\/contents\/(.+)\?ref=([0-9a-f]+)$/);
     const text = m && contents[m[2]]?.[decodeURIComponent(m[1])];
     if (text === undefined) throw new Error(`GitHub API ${path}: 404`);
-    return file(text);
+    const p = decodeURIComponent(m[1]);
+    return entry(file(text, p, m[2] === HEAD_SHA ? HEAD_BLOB : MB_BLOB), m[2]);
   };
   return { api, calls };
 }
-const mod = (filename, extra = {}) => ({ filename, status: 'modified', ...extra });
+const mod = (filename, extra = {}) => ({
+  filename,
+  status: 'modified',
+  sha: HEAD_BLOB,
+  ...extra,
+});
 
 test('proofs: an exports-only change is proven, compared at the merge base and the head', async () => {
   const { api, calls } = fakeApi({
@@ -335,6 +477,52 @@ test('proofs: a rename into a manifest path is not proven, even if marked modifi
     [mod(P, { previous_filename: 'packages/schema/old.json' })],
     api,
   );
+  assert.equal(r.noDependencyChange.size, 0);
+});
+
+// #120 item 4: the fetched content must be the files-list entry (path + blob sha).
+const unchanged = {
+  contents: {
+    [MB_SHA]: { [P]: j(BASE) },
+    [HEAD_SHA]: { [P]: with_({ exports: { './y': './y.ts' } }) },
+  },
+};
+
+test('proofs: the control case for the path/sha checks is proven', async () => {
+  const { api } = fakeApi(unchanged);
+  const r = await manifestProofs('o/r', 1, [mod(P)], api);
+  assert.deepEqual([...r.noDependencyChange], [P]);
+});
+
+test('proofs: a head entry for another path (symlink answer) is not proven', async () => {
+  const { api } = fakeApi({
+    ...unchanged,
+    entry: (e, ref) => (ref === HEAD_SHA ? { ...e, path: 'packages/schema/target.json' } : e),
+  });
+  const r = await manifestProofs('o/r', 1, [mod(P)], api);
+  assert.equal(r.noDependencyChange.size, 0);
+  assert.match(r.notes.join('\n'), /not the listed path and blob/);
+});
+
+test('proofs: a base entry for another path is not proven', async () => {
+  const { api } = fakeApi({
+    ...unchanged,
+    entry: (e, ref) => (ref === MB_SHA ? { ...e, path: 'packages/schema/target.json' } : e),
+  });
+  const r = await manifestProofs('o/r', 1, [mod(P)], api);
+  assert.equal(r.noDependencyChange.size, 0);
+});
+
+test('proofs: a head blob sha that differs from the files list is not proven', async () => {
+  const { api } = fakeApi(unchanged);
+  const r = await manifestProofs('o/r', 1, [mod(P, { sha: 'f'.repeat(40) })], api);
+  assert.equal(r.noDependencyChange.size, 0);
+  assert.match(r.notes.join('\n'), /not the listed path and blob/);
+});
+
+test('proofs: a files-list entry without a sha is not proven', async () => {
+  const { api } = fakeApi(unchanged);
+  const r = await manifestProofs('o/r', 1, [mod(P, { sha: undefined })], api);
   assert.equal(r.noDependencyChange.size, 0);
 });
 

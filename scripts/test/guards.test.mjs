@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { globToRegExp, matchesAny } from '../lib/glob.mjs';
-import { checkTenants } from '../tenant-guard.mjs';
+import { checkTenants, safe } from '../tenant-guard.mjs';
 import { checkBoundaries, findImports } from '../check-boundaries.mjs';
 import { evaluate } from '../review-gate.mjs';
 import { closedIssue, parseTouches, outside } from '../touches-guard.mjs';
@@ -120,6 +121,53 @@ test('tenant-guard: asset names must match AssetRef segments', () => {
   const r2 = tmp();
   put(r2, 'a/content/pages/About Us.md', '# x\n');
   assert.deepEqual(checkTenants(r2), []);
+});
+
+test('tenant-guard: only assets/ and content/ are allowed tenant-level folders', () => {
+  const r = tmp();
+  put(r, 'a/Assets/logo.png', 'x');
+  put(r, 'a/CONTENT/pages/about.md', '# x\n');
+  put(r, 'a/custom/x.md', '# x\n');
+  put(r, 'a/site.config.yaml', 'theme: x\n');
+  put(r, 'a/assets/logo.png', 'x');
+  put(r, 'a/content/pages/about.md', '# x\n');
+  put(r, 'a/content/Pages/Sub/About.md', '# x\n'); // deeper folders are not restricted here
+  const bad = checkTenants(r)
+    .filter((p) => p.rule === 'tenant-folder')
+    .map((p) => p.path)
+    .sort();
+  assert.deepEqual(bad, ['tenants/a/Assets', 'tenants/a/CONTENT', 'tenants/a/custom']);
+  const ok = tmp();
+  put(ok, 'a/assets/logo.png', 'x');
+  put(ok, 'a/content/menu.yaml', 'x: 1\n');
+  assert.deepEqual(checkTenants(ok), []);
+});
+
+test('tenant-guard: control characters in names are escaped everywhere they are printed', () => {
+  assert.equal(
+    safe('a\nb\r\t\u001b\u007f\u0085\u2028"\\'),
+    'a\\nb\\r\\t\\u001b\\u007f\\u0085\\u2028\\"\\\\',
+  );
+  const r = tmp();
+  const evil = 'x\n::error::pwned.js';
+  put(r, `a/${evil}`, 'x');
+  put(r, `a/assets/bad\n::error::y.jpg`, 'x');
+  put(r, `a/Evil\n::error::z/f.md`, '# x\n');
+  const problems = checkTenants(r);
+  assert.ok(problems.length >= 3);
+  for (const p of problems) {
+    for (const ch of p.path + p.message) {
+      const c = ch.charCodeAt(0);
+      const control = c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029;
+      assert.ok(!control, `control character U+${c.toString(16)} in ${JSON.stringify(p.path)}`);
+    }
+  }
+  assert.ok(problems.some((p) => p.path === 'tenants/a/x\\n::error::pwned.js'));
+  // End to end: no output line may start with a workflow command.
+  const res = spawnSync(process.execPath, ['scripts/tenant-guard.mjs', r], { encoding: 'utf8' });
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /x\\n::error::pwned\.js/);
+  for (const line of res.stderr.split('\n')) assert.ok(!line.trimStart().startsWith('::'), line);
 });
 
 test('tenant-guard: valid asset names pass', () => {
