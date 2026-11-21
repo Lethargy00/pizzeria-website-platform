@@ -31,7 +31,7 @@ concurrency:
 #     format it in a reviewed PR instead (ci runs format:check on every PR).
 env:
   FORMAT_PATHS: '\.(md|mdx|json|jsonc|json5|yaml|yml|css|scss|html|astro|js|mjs|cjs|jsx|ts|mts|cts|tsx)$'
-  PROTECTED_PATHS: '(^|/)\.|^(scripts|tenants|e2e)/|^packages/(cli|functions|adapters|schema)/|(^|/)(package\.json|pnpm-workspace\.yaml|turbo\.json|tsconfig[^/]*\.json|[^/]*\.config\.[^/]*)$|^(AGENTS|PROMPT|SECURITY)\.md$|^docs/(SECURITY|THREAT-MODEL|DECISIONS|DEPENDENCIES)\.md$|^docs/adr/|[Ss]anitiz|[Cc]sp|/headers/|Form'
+  PROTECTED_PATHS: '(^|/)\.|^(scripts|tenants|e2e)/|^packages/(cli|functions|adapters|schema)/|(^|/)(package\.(json|yaml|json5)|pnpm-workspace\.yaml|turbo\.json|tsconfig[^/]*\.json|[^/]*\.config\.[^/]*)$|^(AGENTS|PROMPT|SECURITY)\.md$|^docs/(SECURITY|THREAT-MODEL|DECISIONS|DEPENDENCIES)\.md$|^docs/adr/|[Ss]anitiz|[Cc]sp|/headers/|Form'
 jobs:
   generate:
     if: github.ref == 'refs/heads/main'

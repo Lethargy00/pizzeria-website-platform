@@ -214,6 +214,7 @@ const BASE = {
   'tenants/demo/site.json': '{}\n',
   'eslint.config.js': 'export default [];\n',
   'docs/notes.txt': 'notes\n',
+  'packages/ui/package.yaml': 'name: ui\n',
 };
 
 // Builds a repo from BASE (minus `omit`), applies `change`, turns it into a patch, resets, then
@@ -270,6 +271,7 @@ test('verify: rejects protected, new, deleted, mode-changed and symlinked paths'
     workflow: (r) => put(r, '.github/workflows/ci.yml', 'name: ci\non: push\n'),
     npmrc: (r) => put(r, '.npmrc', 'save-exact=false\n'),
     'package.json': (r) => put(r, 'package.json', '{ "name": "y" }\n'),
+    'package.yaml manifest': (r) => put(r, 'packages/ui/package.yaml', 'name: evil\n'),
     'gate script': (r) => put(r, 'scripts/review-gate.mjs', 'process.exit(0);\n'),
     'security doc': (r) => put(r, 'docs/SECURITY.md', '# none\n'),
     'cli package': (r) => put(r, 'packages/cli/src/b.ts', 'export const b = 1;\n'),
