@@ -130,3 +130,27 @@ test('CODEOWNERS: the rest of @pwp/core and ordinary scripts are not marked for 
   assert.doesNotMatch(ownerOf('packages/core/src/index.ts').note, /security/);
   assert.doesNotMatch(ownerOf('scripts/typecheck.mjs').note, /security/);
 });
+
+// --- every ALT_MANIFESTS glob has a CODEOWNERS line with a security note (#160) ---------------
+// review-gate.mjs treats ALT_MANIFESTS as dependency paths (which need approved:security), so
+// CODEOWNERS must say so. The list is read from the source text so it cannot drift.
+const gateSrc = readFileSync(new URL('../review-gate.mjs', import.meta.url), 'utf8');
+const altBlock = /export const ALT_MANIFESTS = \[([\s\S]*?)\];/.exec(gateSrc);
+const altGlobs = altBlock ? [...altBlock[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
+
+test('ALT_MANIFESTS was parsed from review-gate.mjs', () => {
+  assert.ok(altGlobs.length >= 3, `parsed ${JSON.stringify(altGlobs)}`);
+});
+
+for (const glob of altGlobs) {
+  const braces = /\{([^}]+)\}/.exec(glob);
+  const expanded = braces ? braces[1].split(',').map((x) => glob.replace(braces[0], x)) : [glob];
+  for (const g of expanded) {
+    test(`CODEOWNERS: ALT_MANIFESTS ${g} is owned with security review`, () => {
+      const e = ownerOf(g.replaceAll('*', 'x'));
+      assert.ok(e, `no CODEOWNERS entry matches ${g}`);
+      assert.ok(e.owners.length > 0, `${g} has no owner`);
+      assert.match(e.note, /\bsecurity\b/, `${g} resolves to "#${e.note}"`);
+    });
+  }
+}

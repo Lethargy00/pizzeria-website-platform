@@ -47,12 +47,12 @@
 # Alternate dependency manifests (#139). Mirrors ALT_MANIFESTS in scripts/review-gate.mjs (#137).
 # CODEOWNERS has no brace expansion, so each extension gets its own line. Placed after the
 # /playground/ and /packages/ entries so that, as the last match, they own these files.
-/package.yaml                       @Lethargy00  # platform
-/package.json5                      @Lethargy00  # platform
-/playground/package.yaml            @Lethargy00  # platform
-/playground/package.json5           @Lethargy00  # platform
-/packages/*/package.yaml            @Lethargy00  # platform
-/packages/*/package.json5           @Lethargy00  # platform
+/package.yaml                       @Lethargy00  # platform + security review (alternate manifest, a dependency path)
+/package.json5                      @Lethargy00  # platform + security review (alternate manifest, a dependency path)
+/playground/package.yaml            @Lethargy00  # platform + security review (alternate manifest, a dependency path)
+/playground/package.json5           @Lethargy00  # platform + security review (alternate manifest, a dependency path)
+/packages/*/package.yaml            @Lethargy00  # platform + security review (alternate manifest, a dependency path)
+/packages/*/package.json5           @Lethargy00  # platform + security review (alternate manifest, a dependency path)
 
 # Security-reviewed paths. Kept LAST: in CODEOWNERS the last matching pattern wins, so these
 # override the broader role entries above. Changing or removing any of them needs security review.
