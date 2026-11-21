@@ -156,7 +156,11 @@ test('tenant-guard: control characters in names are escaped everywhere they are 
   const problems = checkTenants(r);
   assert.ok(problems.length >= 3);
   for (const p of problems) {
-    assert.doesNotMatch(p.path + p.message, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+    for (const ch of p.path + p.message) {
+      const c = ch.charCodeAt(0);
+      const control = c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029;
+      assert.ok(!control, `control character U+${c.toString(16)} in ${JSON.stringify(p.path)}`);
+    }
   }
   assert.ok(problems.some((p) => p.path === 'tenants/a/x\\n::error::pwned.js'));
   // End to end: no output line may start with a workflow command.
