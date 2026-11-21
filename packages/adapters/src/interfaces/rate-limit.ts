@@ -7,11 +7,11 @@
  * a store never receives an IP address, email or other raw identifier.
  */
 
+import type { RateLimitAdapterName } from '@pwp/schema/adapters';
 import type { AdapterCallOptions } from './index.js';
 
-/** Closed set of rate-limit store names (= folder names). Moves to `@pwp/schema/adapters` in #64. */
-export const RATE_LIMIT_ADAPTER_NAMES = ['memory-rate-limit'] as const;
-export type RateLimitAdapterName = (typeof RATE_LIMIT_ADAPTER_NAMES)[number];
+/** Closed set of rate-limit store names (= folder names). Canonical in `@pwp/schema/adapters` (#64). */
+export { RATE_LIMIT_ADAPTER_NAMES, type RateLimitAdapterName } from '@pwp/schema/adapters';
 
 /**
  * Opaque key `<scope>:<digest>`. `scope` is a short constant (`[a-z0-9-]{1,32}`, e.g.
@@ -43,8 +43,11 @@ export interface RateLimitResult {
  * - Sliding or fixed window is the store's choice, but it must never allow more than
  *   `2 × limit` hits in any `windowSeconds` span.
  * - Keys expire on their own; a store keeps no data longer than `windowSeconds` after the last hit.
- * - Rejects only with `AdapterError` (`timeout`, `unavailable`, `misconfigured`). Callers
- *   **fail closed**: if the store errors, the request is refused (#50).
+ * - Rejects only with `AdapterError`: `invalid_input` when `key` is not a well-formed
+ *   {@link RateLimitKey} or when `window.limit` or `window.windowSeconds` is not a positive safe
+ *   integer (or exceeds the store's documented maximum); `timeout`, `unavailable`,
+ *   `misconfigured`. It never throws `RangeError` or any other type. Callers **fail closed**: if
+ *   the store errors, the request is refused (#50).
  */
 export interface RateLimitStore {
   readonly name: RateLimitAdapterName;
