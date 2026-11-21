@@ -17,7 +17,7 @@ import {
   minimalLocation,
   omit,
 } from './fixtures.js';
-import { safeUrlFixtures, type Fixtures } from '../primitives/fixtures.js';
+import { SINGLE_LINE_TEXT_UNSAFE, safeUrlFixtures, type Fixtures } from '../primitives/fixtures.js';
 
 const label = (value: unknown): string => String(JSON.stringify(value)).slice(0, 160);
 
@@ -128,6 +128,21 @@ describe('locationsSchema issues', () => {
   ])('gives an invalid geo %j on a click-to-load map exactly one issue', (geo, path, code) => {
     expect(issues({ locations: [{ ...fullLocation, geo }] })).toEqual([{ path, code }]);
   });
+
+  it.each(SINGLE_LINE_TEXT_UNSAFE.map(([name, value]) => [name, value]))(
+    'a name, street or city with %s is one invalid_format issue (#157)',
+    (_, value) => {
+      expect(issues({ locations: [{ ...minimalLocation, name: value }] })).toEqual([
+        { path: ['locations', 0, 'name'], code: 'invalid_format' },
+      ]);
+      for (const field of ['street', 'city'] as const) {
+        const address = { ...minimalLocation.address, [field]: value };
+        expect(issues({ locations: [{ ...minimalLocation, address }] })).toEqual([
+          { path: ['locations', 0, 'address', field], code: 'invalid_format' },
+        ]);
+      }
+    },
+  );
 
   it('does not crash on entries that are not objects', () => {
     expect(issues({ locations: [null, minimalLocation] })).toEqual([

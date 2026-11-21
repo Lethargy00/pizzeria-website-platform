@@ -6,6 +6,7 @@ import {
   Slug,
   isSafeUrl,
   localizedStringFor,
+  singleLineText,
   strictObject,
   type LocaleContext,
 } from '../primitives/index.js';
@@ -31,15 +32,10 @@ export const PostalCode = z.string().regex(/^\d{3} \d{2}$/);
 export type PostalCode = z.infer<typeof PostalCode>;
 
 /**
- * A proper name or address line: trimmed, not empty, one line. Names of places and streets are
- * not translated, so they are plain text, not a localized string.
+ * A proper name or address line: one line of visitor-facing text (`singleLineText`). Names of
+ * places and streets are not translated, so they are plain text, not a localized string.
  */
-const PlaceText = z
-  .string()
-  .trim()
-  .min(1)
-  .max(MAX_PLACE_TEXT_LENGTH)
-  .regex(/^[^\r\n]*$/);
+const PlaceText = singleLineText(MAX_PLACE_TEXT_LENGTH);
 
 /** A postal address in Sweden. */
 export const Address = strictObject({

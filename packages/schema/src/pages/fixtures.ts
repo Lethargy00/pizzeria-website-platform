@@ -4,7 +4,7 @@
  *
  * All names and texts are fictional.
  */
-import type { Fixtures } from '../primitives/fixtures.js';
+import { SINGLE_LINE_TEXT_UNSAFE, type Fixtures } from '../primitives/fixtures.js';
 
 const NOT_OBJECTS = [undefined, null, 1, 'x', true, []] as const;
 
@@ -33,6 +33,7 @@ export const frontMatterSvEnFixtures: Fixtures = {
     { ...aboutSv, key: 'lunch-2026' },
     { ...aboutSv, title: 'T'.repeat(120), description: 'D'.repeat(300) },
     { ...aboutSv, title: '  Om oss  ' },
+    { ...aboutSv, title: 'Pizza 🍕 & öl', description: 'Café «Ängel» – sedan 1998.' },
   ],
   invalid: [
     ...NOT_OBJECTS,
@@ -57,6 +58,11 @@ export const frontMatterSvEnFixtures: Fixtures = {
     { ...aboutSv, description: '' },
     { ...aboutSv, description: 'D'.repeat(301) },
     { ...aboutSv, description: 'rad ett\nrad två' },
+    // #157: every character class `singleLineText` rejects, in both one-line fields.
+    ...SINGLE_LINE_TEXT_UNSAFE.flatMap(([, value]) => [
+      { ...aboutSv, title: value },
+      { ...aboutSv, description: value },
+    ]),
     { key: 'about', locale: 'sv', title: 'Om oss' },
     { key: 'about', locale: 'sv', description: 'x' },
     { locale: 'sv', title: 'Om oss', description: 'x' },

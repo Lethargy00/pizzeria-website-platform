@@ -9,7 +9,7 @@ import {
 } from './index.js';
 import * as pages from './index.js';
 import { aboutEn, aboutSv, frontMatterSvEnFixtures, frontMatterSvFixtures } from './fixtures.js';
-import { slugFixtures, type Fixtures } from '../primitives/fixtures.js';
+import { SINGLE_LINE_TEXT_UNSAFE, slugFixtures, type Fixtures } from '../primitives/fixtures.js';
 import type { LocaleCode } from '../primitives/index.js';
 
 const label = (value: unknown): string => String(JSON.stringify(value)).slice(0, 160);
@@ -136,6 +136,18 @@ describe('one mistake gives exactly one issue', () => {
   ])('%s', (_, value, expected) => {
     expect(issues(SvEn, value)).toEqual(expected);
   });
+
+  it.each(SINGLE_LINE_TEXT_UNSAFE.map(([name, value]) => [name, value]))(
+    'a title or description with %s is one invalid_format issue (#157)',
+    (_, value) => {
+      expect(issues(SvEn, { ...aboutSv, title: value })).toEqual([
+        { path: ['title'], code: 'invalid_format' },
+      ]);
+      expect(issues(SvEn, { ...aboutSv, description: value })).toEqual([
+        { path: ['description'], code: 'invalid_format' },
+      ]);
+    },
+  );
 
   it('a locale the tenant did not enable is one issue, not two', () => {
     expect(issues(Sv, aboutEn)).toEqual([{ path: ['locale'], code: 'invalid_value' }]);
