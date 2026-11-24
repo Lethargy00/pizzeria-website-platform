@@ -181,9 +181,12 @@ const AUTOLINK = String.raw`(?:https|mailto|tel):[^\s<>]*>|[a-z0-9._%+-]+@[a-z0-
 const HTML_VIEWS = ['yaml'];
 // One character of a MIME type or subtype (an RFC 9110 token), as in a data: URL's media type.
 const MIME_TOKEN = "[a-z0-9!#$%&'*+.^_`|~-]";
-// The same without "%", for the type part, so that "%2f" can only be the separator (#180). This
-// fixes where the type ends and keeps the rule linear.
+// The type part of a data: URL's media type: token characters without "%", or a whole "%XX"
+// escape other than "%2F" (#180). "%2F" can then only be the separator, and a lone "%" ends the
+// type ("Rabatt data: 10%/20%, x" passes). The two branches are disjoint, so there is one way to
+// match and the rule stays linear. "data:te%78t/html,x" still fails, as it did before #180.
 const MIME_TYPE_TOKEN = "[a-z0-9!#$&'*+.^_`|~-]";
+const MIME_TYPE_PART = String.raw`(?:${MIME_TYPE_TOKEN}|%(?!2f)[0-9a-f]{2})+`;
 const ALL_VIEWS = ['yaml', 'decoded', 'stripped'];
 export const CONTENT_RULES = [
   {
@@ -223,7 +226,7 @@ export const CONTENT_RULES = [
     // defence in depth and not every engine has been checked.
     id: 'js-url',
     re: new RegExp(
-      String.raw`(?<![a-z0-9+.-])(?:(?:javascript|vbscript)\s*:|data\s*:\s*(?:${MIME_TYPE_TOKEN}+(?:\/|%2f)${MIME_TOKEN}+?\s*)?(?:[;,]|%3b|%2c))`,
+      String.raw`(?<![a-z0-9+.-])(?:(?:javascript|vbscript)\s*:|data\s*:\s*(?:${MIME_TYPE_PART}(?:\/|%2f)${MIME_TOKEN}+?\s*)?(?:[;,]|%3b|%2c))`,
       'i',
     ),
     views: ALL_VIEWS,
