@@ -374,6 +374,76 @@ describe('memory-rate-limit', () => {
     });
   });
 
+  describe('a clock that steps backwards keeps the counter (#174)', () => {
+    const w = { limit: 1, windowSeconds: 60 };
+
+    it('sweep does not evict a live key after a backwards step', async () => {
+      const c = clock(); // T
+      const s = createMemoryRateLimitStore({ now: c.now, maxKeys: 2 });
+      expect((await s.hit(key('a'), w)).allowed).toBe(true); // a hit at T, live until T+60
+      c.advance(-50_000); // NTP step to T-50
+      expect((await s.hit(key('a'), w)).allowed).toBe(false);
+      expect((await s.hit(key('b'), w)).allowed).toBe(true); // b expires at T+10; store full
+      c.advance(70_000); // T+20: b has expired, a has not
+      expect((await s.hit(key('c'), w)).allowed).toBe(true); // sweep drops b only
+      expect(s.size).toBe(2);
+      expect((await s.hit(key('a'), w)).allowed).toBe(false);
+    });
+
+    it('stays blocked until the original window ends, through sweeps', async () => {
+      const c = clock(); // T
+      const s = createMemoryRateLimitStore({ now: c.now, maxKeys: 2 });
+      expect((await s.hit(key('a'), w)).allowed).toBe(true); // window ends at T+60
+      c.advance(-30_000); // T-30
+      expect((await s.hit(key('a'), w)).allowed).toBe(false);
+      // No more hits on `a`, so nothing refreshes its expiry. New keys on a full store run
+      // sweep at T-20 ... T+50 and at T+59.999, which must keep `a` every time.
+      for (let i = 1; i <= 8; i++) {
+        c.advance(10_000);
+        await s.hit(key('x', i), w).catch(() => undefined);
+      }
+      c.advance(9_999); // T+59.999
+      await s.hit(key('x', 9), w).catch(() => undefined);
+      expect((await s.hit(key('a'), w)).allowed).toBe(false);
+    });
+
+    it('retryAfterSeconds stays correct after the step', async () => {
+      const c = clock(); // T
+      const s = createMemoryRateLimitStore({ now: c.now });
+      const k = key('a');
+      expect((await s.hit(k, w)).allowed).toBe(true); // T
+      expect((await s.hit(k, w)).allowed).toBe(false); // T (counts)
+      c.advance(-30_000); // T-30: the T hits leave the window at T+60, 90 s from now
+      const blocked = await s.hit(k, w);
+      expect(blocked).toMatchObject({ allowed: false, retryAfterSeconds: 90 });
+      c.advance(89_999); // T+59.999: still blocked, and the advice still holds
+      expect(await s.hit(k, w)).toMatchObject({ allowed: false, retryAfterSeconds: 60 });
+    });
+
+    it('a forward clock keeps times sorted: the trim keeps the newest hits', async () => {
+      const c = clock();
+      const s = createMemoryRateLimitStore({ now: c.now });
+      const k = key('a');
+      expect((await s.hit(k, w)).allowed).toBe(true); // t=0
+      c.advance(10_000);
+      expect((await s.hit(k, w)).allowed).toBe(false); // t=10
+      c.advance(10_000);
+      // t=20: the t=0 hit is trimmed; the t=20 hit is the last to leave, at t=80.
+      expect(await s.hit(k, w)).toMatchObject({ allowed: false, retryAfterSeconds: 60 });
+    });
+
+    it('a later hit with a shorter window does not shorten the expiry', async () => {
+      const c = clock();
+      const s = createMemoryRateLimitStore({ now: c.now, maxKeys: 1 });
+      expect((await s.hit(key('a'), { limit: 1, windowSeconds: 600 })).allowed).toBe(true);
+      expect((await s.hit(key('a'), { limit: 1, windowSeconds: 1 })).allowed).toBe(false);
+      c.advance(2_000);
+      // The 600 s hit is still live, so sweep must not free the slot.
+      await expect(s.hit(key('b'), w)).rejects.toMatchObject({ code: 'unavailable' });
+      expect((await s.hit(key('a'), { limit: 1, windowSeconds: 600 })).allowed).toBe(false);
+    });
+  });
+
   it('factory declares no env vars and builds a store', () => {
     expect(factory.name).toBe('memory-rate-limit');
     expect(factory.env).toEqual([]);

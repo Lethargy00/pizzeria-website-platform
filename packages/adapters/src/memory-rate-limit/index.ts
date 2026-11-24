@@ -15,6 +15,8 @@
  * - Fails closed on a bad clock: a `now()` result that is not a finite, non-negative number
  *   rejects with `unavailable` and records nothing (#159). Bad key or window types reject with
  *   `invalid_input` before the clock is read.
+ * - Tolerates a clock that steps backwards (e.g. an NTP step): `times` stays sorted and
+ *   `expiresAt` never moves earlier, so a key's counter is never reset early (#174).
  * - JavaScript is single-threaded and `hit` has no `await` between read and write, so it is
  *   atomic per key.
  */
@@ -115,12 +117,20 @@ export function createMemoryRateLimitStore(
       entries.set(key, entry);
     }
     // Drop hits that left the window (a hit exactly one window old has left it).
+    // After a backwards clock step a logged hit can be later than `t`; it is still in the window
+    // (fails closed) until the clock passes it by a full window (#174).
     const live = entry.times.filter((x) => t - x < windowMs);
     const priorHits = live.length;
-    live.push(t);
+    // Insert in order, so `times` stays ascending even after a backwards step. Then the trim
+    // below keeps the hits that leave the window last, and the pivot below is right (#174).
+    let at = live.length;
+    while (at > 0 && (live[at - 1] ?? 0) > t) at--;
+    live.splice(at, 0, t);
     // Keep the newest limit + 1: older ones can never change a decision.
     entry.times = live.length > limit + 1 ? live.slice(live.length - (limit + 1)) : live;
-    entry.expiresAt = t + windowMs;
+    // Monotonic: a backwards clock step (or a shorter window on a later call) must never move
+    // the expiry earlier, or `sweep` could drop a live key and reset its counter (#174).
+    entry.expiresAt = Math.max(entry.expiresAt, t + windowMs);
 
     if (priorHits < limit) {
       return { allowed: true, remaining: limit - priorHits - 1, retryAfterSeconds: 0 };
