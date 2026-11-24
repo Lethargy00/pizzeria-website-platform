@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   LOCALES,
   Slug,
+  singleLineText,
   strictObject,
   type LocaleCode,
   type LocaleContext,
@@ -20,16 +21,6 @@ export const MAX_PAGE_DESCRIPTION_LENGTH = 300;
  */
 export const PageKey = Slug;
 export type PageKey = z.infer<typeof PageKey>;
-
-/** One line of visitor-facing text: trimmed, not empty, no line breaks. */
-function lineOfText(max: number) {
-  return z
-    .string()
-    .trim()
-    .min(1)
-    .max(max)
-    .regex(/^[^\r\n]*$/);
-}
 
 /**
  * The front matter of one `content/pages/*.md` file of a tenant (#28).
@@ -67,8 +58,9 @@ export function pageFrontMatterSchema(ctx: LocaleContext) {
     key: PageKey,
     /** One enabled locale; anything else is a single `invalid_value` issue at `['locale']`. */
     locale: z.enum(locales as [LocaleCode, ...LocaleCode[]]),
-    title: lineOfText(MAX_PAGE_TITLE_LENGTH),
-    description: lineOfText(MAX_PAGE_DESCRIPTION_LENGTH),
+    /** One line (`singleLineText`): no controls, line separators, bidi or zero-width characters. */
+    title: singleLineText(MAX_PAGE_TITLE_LENGTH),
+    description: singleLineText(MAX_PAGE_DESCRIPTION_LENGTH),
   });
 }
 

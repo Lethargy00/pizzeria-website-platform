@@ -474,3 +474,79 @@ export const isoDateTimeFixtures: Fixtures = {
     `2026-11-21T04:00:00.${'1'.repeat(1000)}Z`,
   ],
 };
+
+/**
+ * For `singleLineText` (#157): one value per character class the rule rejects, each with a
+ * readable label. Every entry must give exactly one `invalid_format` issue, in the primitive and
+ * in every field built on it (page title and description, location name, street, city).
+ */
+export const SINGLE_LINE_TEXT_UNSAFE: readonly (readonly [label: string, value: string])[] = [
+  ['LF', 'a\nb'],
+  ['CR LF', 'a\r\nb'],
+  ['CR', 'a\rb'],
+  ['TAB', 'a\tb'],
+  ['vertical tab', 'a\u000bb'],
+  ['form feed', 'a\u000cb'],
+  ['NUL', 'a\u0000b'],
+  ['ESC (terminal escape)', 'a\u001b[31mb'],
+  ['DEL', 'a\u007fb'],
+  ['NEL (U+0085)', 'a\u0085b'],
+  ['C1 CSI (U+009B)', 'a\u009bb'],
+  ['line separator U+2028', 'a b'],
+  ['paragraph separator U+2029', 'a b'],
+  ['LRE U+202A', 'a‪b'],
+  ['RLE U+202B', 'a‫b'],
+  ['PDF U+202C', 'a‬b'],
+  ['LRO U+202D', 'a‭b'],
+  ['RLO U+202E', 'a‮b'],
+  ['LRI U+2066', 'a⁦b'],
+  ['RLI U+2067', 'a⁧b'],
+  ['FSI U+2068', 'a⁨b'],
+  ['PDI U+2069', 'a⁩b'],
+  ['LRM U+200E', 'a‎b'],
+  ['RLM U+200F', 'a‏b'],
+  ['ALM U+061C', 'a؜b'],
+  ['zero-width space U+200B', 'a​b'],
+  ['ZWNJ U+200C', 'a‌b'],
+  ['ZWJ U+200D', 'a‍b'],
+  ['word joiner U+2060', 'a⁠b'],
+  ['BOM inside U+FEFF', 'a﻿b'],
+  ['soft hyphen U+00AD', 'a­b'],
+  ['lone high surrogate', 'a\ud800b'],
+  ['lone low surrogate', 'a\udc00b'],
+  ['zero-width space only', '​'],
+  ['zero-width characters only', '​‌‍⁠'],
+  ['bidi override only', '‮'],
+  ['combining mark only', '́'],
+];
+
+/** For `singleLineText(20)`. */
+export const singleLineTextFixtures: Fixtures = {
+  valid: [
+    'Om oss',
+    'a',
+    '1',
+    '-',
+    '🍕',
+    'Pizza ❤️',
+    'Café Ängelholm',
+    'Smörgås & öl: 99 kr',
+    'Åäö ÅÄÖ é ü ñ',
+    '  Om oss  ',
+    ' Om oss ',
+    '﻿Om oss',
+    'Om oss',
+    'Rock’n’roll',
+    'x'.repeat(20),
+    ` ${'x'.repeat(20)} `,
+  ],
+  invalid: [
+    ...NOT_STRINGS,
+    '',
+    ' ',
+    ' ',
+    '\n',
+    'x'.repeat(21),
+    ...SINGLE_LINE_TEXT_UNSAFE.map(([, value]) => value),
+  ],
+};

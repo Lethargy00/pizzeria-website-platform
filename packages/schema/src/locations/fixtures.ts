@@ -4,7 +4,7 @@
  *
  * All places, numbers and addresses are fictional.
  */
-import type { Fixtures } from '../primitives/fixtures.js';
+import { SINGLE_LINE_TEXT_UNSAFE, type Fixtures } from '../primitives/fixtures.js';
 
 const NOT_OBJECTS = [undefined, null, 1, 'x', true, []] as const;
 
@@ -65,6 +65,8 @@ export const locationsSvEnFixtures: Fixtures = {
     withLocation({ geo: { lat: 0, lng: -180 } }),
     withAddress({ postalCode: '000 00' }),
     withLocation({ name: '  Pizzeria Exempel  ' }),
+    withLocation({ name: 'Café Ängel & Söner 🍕' }),
+    withAddress({ street: 'Rörstrandsgatan 4–6', city: 'Malmö' }),
     {
       locations: Array.from({ length: 50 }, (_, i) => ({ ...minimalLocation, id: `plats-${i}` })),
     },
@@ -107,6 +109,12 @@ export const locationsSvEnFixtures: Fixtures = {
     withLocation({ name: { sv: 'Exempel' } }),
     withAddress({ street: '' }),
     withAddress({ city: 'x'.repeat(201) }),
+    // #157: every character class `singleLineText` rejects, in name, street and city.
+    ...SINGLE_LINE_TEXT_UNSAFE.flatMap(([, value]) => [
+      withLocation({ name: value }),
+      withAddress({ street: value }),
+      withAddress({ city: value }),
+    ]),
     // Swedish postal code
     withAddress({ postalCode: '11846' }),
     withAddress({ postalCode: '118-46' }),

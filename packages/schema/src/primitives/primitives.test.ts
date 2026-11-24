@@ -21,6 +21,7 @@ import {
   isSafeAssetPath,
   isSafeUrl,
   localizedStringFor,
+  singleLineText,
   strictObject,
   type SafeHtml,
 } from './index.js';
@@ -36,6 +37,8 @@ import {
   phoneNumberFixtures,
   priceSEKFixtures,
   safeUrlFixtures,
+  SINGLE_LINE_TEXT_UNSAFE,
+  singleLineTextFixtures,
   slugFixtures,
   timeOfDayFixtures,
   weekdayFixtures,
@@ -155,6 +158,66 @@ function customParams(result: { success: boolean; error?: z.ZodError }): unknown
     issue.code === 'custom' ? issue.params : undefined,
   );
 }
+
+table('singleLineText(20)', singleLineText(20), singleLineTextFixtures);
+
+describe('singleLineText (#157)', () => {
+  const Line = singleLineText(20);
+
+  it('trims and returns the text unchanged otherwise', () => {
+    expect(Line.parse('  Om oss  ')).toBe('Om oss');
+    expect(Line.parse('\u00a0Pizza ❤️\ufeff')).toBe('Pizza ❤️');
+  });
+
+  it('counts the limit after trimming', () => {
+    expect(Line.parse(` ${'x'.repeat(20)} `)).toBe('x'.repeat(20));
+  });
+
+  it.each(SINGLE_LINE_TEXT_UNSAFE.map(([name, value]) => [name, value]))(
+    'raises exactly one invalid_format issue for %s',
+    (_, value) => {
+      expect(Line.safeParse(value).error?.issues).toEqual([
+        expect.objectContaining({ code: 'invalid_format', format: 'regex', path: [] }),
+      ]);
+    },
+  );
+
+  it.each([
+    ['empty', ''],
+    ['spaces only', '   '],
+    ['no-break spaces only', '\u00a0\u00a0'],
+    ['a line break only (trimmed away)', '\r\n'],
+  ])('raises exactly one too_small issue for %s', (_, value) => {
+    expect(Line.safeParse(value).error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_small', minimum: 1, path: [] }),
+    ]);
+  });
+
+  it('raises exactly one too_big issue for a long but clean value', () => {
+    expect(Line.safeParse('x'.repeat(21)).error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_big', maximum: 20, path: [] }),
+    ]);
+  });
+
+  it('reports a long value with a control character as two separate mistakes', () => {
+    expect(Line.safeParse(`${'x'.repeat(21)}\u0000`).error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_big', path: [] }),
+      expect.objectContaining({ code: 'invalid_format', path: [] }),
+    ]);
+  });
+
+  it('raises exactly one invalid_type issue for a non-string', () => {
+    expect(Line.safeParse(42).error?.issues).toEqual([
+      expect.objectContaining({ code: 'invalid_type', expected: 'string', path: [] }),
+    ]);
+  });
+
+  it('is linear on long hostile input', () => {
+    const start = Date.now();
+    expect(singleLineText(100_000).safeParse(`${'a '.repeat(40_000)}\u0000`).success).toBe(false);
+    expect(Date.now() - start).toBeLessThan(500);
+  });
+});
 
 describe('strictObject', () => {
   const Schema = strictObject({
