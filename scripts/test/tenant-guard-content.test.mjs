@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { CONTENT_RULES, checkTenants, findRule, normalizeForScan } from '../tenant-guard.mjs';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'pwp-content-'));
@@ -16,6 +17,30 @@ const put = (root, rel, text) => {
 const hits = (text) => {
   const n = normalizeForScan(text);
   return CONTENT_RULES.filter((r) => findRule(r, text, n) !== -1).map((r) => r.id);
+};
+/**
+ * Runs `hits` on each input built by `source` (a JS expression returning an array of strings) in a
+ * child process with a timeout, so a ReDoS regression fails with a clear message instead of
+ * hanging the test run. Returns the rule ids per input.
+ */
+const hitsInChild = (source, timeout = 10_000) => {
+  const guard = new URL('../tenant-guard.mjs', import.meta.url).href;
+  const code = `
+    import { CONTENT_RULES, findRule, normalizeForScan } from ${JSON.stringify(guard)};
+    const out = (${source}).map((text) => {
+      const n = normalizeForScan(text);
+      return CONTENT_RULES.filter((r) => findRule(r, text, n) !== -1).map((r) => r.id);
+    });
+    process.stdout.write(JSON.stringify(out));
+  `;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+    timeout,
+    encoding: 'utf8',
+    maxBuffer: 1 << 20,
+  });
+  assert.ok(!r.error, `scan did not finish within ${timeout} ms (possible ReDoS): ${r.error}`);
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
 };
 /** Problems for `text` as line 2 of a Markdown file and as a YAML value. */
 const scan = (text) => {
@@ -270,6 +295,66 @@ test('js-url: data: URLs fail, literally, entity-encoded and in Markdown links',
     const problems = scan(s).filter((p) => p.rule === 'js-url');
     assert.ok(problems.length >= 2, `${JSON.stringify(s)}: ${JSON.stringify(problems)}`);
   }
+});
+
+// #180: the separators may be percent-encoded.
+test('js-url: data: URLs with percent-encoded separators fail', () => {
+  for (const s of [
+    'data:text%2Fhtml,x',
+    'DATA:text%2fhtml;base64,x',
+    '[x](data:text%2Fhtml,x)',
+    '[x](data:image%2Fsvg+xml;base64,PHN2Zz4=)',
+    '[x](data: text%2Fhtml ,x)',
+    '[x](data:text%2Fhtml%3Bbase64,PHNjcmlwdD4=)', // "%3B" as the parameter separator
+    '[x](data:text%2Fhtml%2Cx)', // "%2C" as the data separator
+    '[x](data:text/html%2cx)',
+    '[x](data:%2Cx)',
+    '[x](data:%3bbase64,PHNjcmlwdD4=)',
+    // Entity-encoded "%" or "/".
+    '[x](data:text&#37;2Fhtml,x)',
+    '[x](data:text&percnt;2fhtml,x)',
+    '[x](data&colon;text&#x25;2Fhtml&comma;x)',
+    'cta: "data:text\\x252Fhtml,x"', // YAML escape
+    // A "%XX" escape in the type part, blocked before #180 and still blocked.
+    'data:te%78t/html,x',
+    'data:%74ext/html;base64,x',
+    '[x](data:te%78t%2Fhtml,x)',
+    '[x](data:%74ext%2fhtml;base64,x)',
+  ]) {
+    assert.ok(hits(s).includes('js-url'), JSON.stringify(s));
+  }
+});
+
+test('js-url: prose with "data:" and a percent sign passes', () => {
+  for (const s of [
+    'Uppdaterad data: 2026',
+    'Data: 20% rabatt, varje dag',
+    'data: 50%',
+    'Vi sparar data: 100%2 gånger',
+    'Rabatt data: 10%/20%, x',
+  ]) {
+    assert.deepEqual(hits(s), [], JSON.stringify(s));
+    assert.deepEqual(scan(s), [], JSON.stringify(s));
+  }
+});
+
+test('js-url: a long percent-encoded media type is scanned in reasonable time', () => {
+  // Each input is about 400-600 KB with no data separator, so none of them may match.
+  const inputs = `[
+    'data:a%2f' + 'a%2f'.repeat(100_000),
+    'data:' + 'a%2f'.repeat(100_000),
+    'data:a%2fa '.repeat(30_000),
+    'data:' + '%'.repeat(100_000),
+    'data:' + '%78'.repeat(200_000),
+    'data:' + '%7'.repeat(300_000),
+    'data:' + 'a%78'.repeat(150_000),
+    'data:' + '%78'.repeat(200_000) + '%2f' + '%78'.repeat(200_000),
+  ]`;
+  const start = Date.now();
+  const got = hitsInChild(inputs);
+  assert.equal(got.length, 8);
+  for (const ids of got) assert.ok(!ids.includes('js-url'), JSON.stringify(ids));
+  assert.ok(Date.now() - start < 10_000, `took ${Date.now() - start} ms`);
 });
 
 test('js-url: the word "data:" in prose and a YAML key named data pass', () => {
