@@ -22,6 +22,7 @@
  * response body.
  */
 
+import { IsoDateTime } from '@pwp/schema/primitives';
 import { AdapterError, WEBHOOK_ENV, WEBHOOK_HEADERS } from '../interfaces/index.js';
 import type {
   AdapterCallOptions,
@@ -179,6 +180,11 @@ function parseTarget(url: string): { hostname: string; host: string; port: numbe
 
 function validateEvent(event: WebhookEvent): string {
   if (!HEADER_SAFE_RE.test(event.id) || !EVENT_TYPES.has(event.type)) {
+    throw fail('invalid_input', 'invalid webhook event');
+  }
+  // Types are erased at runtime: a caller that bypasses them must not reach a receiver with a
+  // malformed timestamp (#178). Fixed message, no cause: the rejected value is never echoed.
+  if (!IsoDateTime.safeParse(event.occurredAt).success) {
     throw fail('invalid_input', 'invalid webhook event');
   }
   const body = JSON.stringify(event);

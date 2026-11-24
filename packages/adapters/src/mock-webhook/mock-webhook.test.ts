@@ -303,6 +303,36 @@ describe('mock-webhook: delivery, signing and retries', () => {
     expect((await failure(notifier.notify(bad))).code).toBe('invalid_input');
     expect(sent).toHaveLength(0);
   });
+
+  it.each([
+    ['not a date', 'yesterday'],
+    ['empty', ''],
+    ['a numeric offset', '2026-11-20T12:00:00.000+01:00'],
+    ['a missing Z', '2026-11-20T12:00:00.000'],
+    ['a date only', '2026-11-20'],
+    ['not a string', 1_763_640_000_000],
+    ['undefined', undefined],
+  ])(
+    'rejects occurredAt that is %s, sends nothing and echoes nothing (#178)',
+    async (_n, value) => {
+      const { notifier, sent } = make();
+      const bad = { ...EVENT, occurredAt: value } as unknown as WebhookEvent;
+      const err = await failure(notifier.notify(bad));
+      expect(err.code).toBe('invalid_input');
+      expect(err.message).toBe('invalid webhook event');
+      expect(err.cause).toBeUndefined();
+      expect(sent).toHaveLength(0);
+    },
+  );
+
+  it('accepts a toISOString() occurredAt (#178)', async () => {
+    const { notifier, sent } = make();
+    await notifier.notify({
+      ...EVENT,
+      occurredAt: new Date(Date.UTC(2026, 10, 20, 12)).toISOString(),
+    });
+    expect(sent).toHaveLength(1);
+  });
 });
 
 describe('mock-webhook: configuration', () => {
