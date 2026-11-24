@@ -11,6 +11,7 @@ import {
   MATRIX,
   PACKAGE_MANIFESTS,
   RICHTEXT_PATHS,
+  SECURITY_PATHS,
 } from '../review-gate.mjs';
 import { globToRegExp } from '../lib/glob.mjs';
 
@@ -144,13 +145,7 @@ test('CODEOWNERS: the rest of @pwp/core and ordinary scripts are not marked for 
 // The globs come from the constants review-gate.mjs exports (never parsed as text), so a new
 // entry, a spread of another constant or a wider PACKAGE_MANIFESTS glob is checked at once.
 const securityRow = MATRIX.find((r) => r.id === 'security');
-// The security row keeps its globs inside the `when` closure and review-gate.mjs does not
-// export them, so read them from the function's source (single, double or backtick quotes).
-// The "import" test below checks that every recovered glob really triggers the row.
-// Follow-up: export the list from review-gate.mjs and import it here.
-const rowGlobs = [...securityRow.when.toString().matchAll(/(['"`])((?:(?!\1).)+)\1/g)]
-  .map((m) => m[2])
-  .filter((g) => g !== 'security:sensitive');
+const rowGlobs = SECURITY_PATHS;
 
 const expandBraces = (glob) => {
   const braces = /\{([^}]+)\}/.exec(glob);
