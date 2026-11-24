@@ -216,8 +216,9 @@ jobs:
             #     specifier did not change may only change its peer suffix (the "(...)" part);
             #   - a new snapshots entry must be reachable from a root through new entries, whose
             #     dependencies must be plain registry versions (so a new npm alias fails), or be a
-            #     peer variant of a base entry: same name@version, and each dependency is the
-            #     base one, part of a root's subtree, or another peer variant of the same version;
+            #     peer variant of a base entry: same name@version, and each dependency is the base
+            #     one, the same name@version with other peers, or, for a declared peerDependency of
+            #     the base packages entry, part of a root's subtree, a variant or a base entry;
             #   - a new packages entry must be a reachable name@version with a sha512 integrity;
             #   - an existing packages entry (so its integrity) may not change at all, and an
             #     existing snapshots entry only in its "optional: true" line.
@@ -241,17 +242,19 @@ jobs:
             }
             edgelist() {
               local IFS=$RS
+              # KEYCHARS already keeps glob characters out of new keys; this is a safeguard.
               set -f
               EDGES=($1)
               set +f
             }
             # graph FILE P REPORT: reads importers, packages and snapshots into P_spec and P_ver
             # (importer US section US name -> value), P_pkg and P_snap (key -> block text), P_eref
-            # (key US name -> ref), P_edges (key -> name US ref RS ...) and P_line. REPORT=1
-            # reports every line outside the plain layout.
+            # (key US name -> ref), P_edges (key -> name US ref RS ...), P_peer (packages key US
+            # name of a declared peerDependency -> 1) and P_line. REPORT=1 reports every line
+            # outside the plain layout.
             graph() {
-              local -n spec="$2_spec" ver="$2_ver" pkg="$2_pkg" snap="$2_snap" eref="$2_eref" edges="$2_edges" at="$2_line"
-              local line t ind k v dn n=0 top= key= imp= sect= id= deps=0 msg
+              local -n spec="$2_spec" ver="$2_ver" pkg="$2_pkg" snap="$2_snap" eref="$2_eref" edges="$2_edges" peer="$2_peer" at="$2_line"
+              local line t ind k v dn n=0 top= key= imp= sect= id= deps=0 pd=0 msg
               local -A seen=()
               while IFS= read -r line || [ -n "$line" ]; do
                 n=$((n + 1))
@@ -300,7 +303,7 @@ jobs:
                 elif [ "$top" = packages ] || [ "$top" = snapshots ]; then
                   if [ "$ind" = 2 ]; then
                     unq "$k"
-                    key=$REPLY deps=0
+                    key=$REPLY deps=0 pd=0
                     if [ -z "$k" ] || { [ -n "$v" ] && [ "$v" != '{}' ]; }; then
                       msg="$top entry that is not 'key:' or 'key: {}'"
                     elif ! [[ "$key" =~ $KEYCHARS ]]; then
@@ -315,6 +318,12 @@ jobs:
                     msg="line outside a $top entry"
                   elif [ "$top" = packages ]; then
                     pkg[$key]+="$line$US"
+                    if [ "$ind" = 4 ]; then
+                      if [ "$k" = peerDependencies ]; then pd=1; else pd=0; fi
+                    elif [ "$pd" = 1 ] && [ "$ind" = 6 ] && [ -n "$k" ]; then
+                      unq "$k"
+                      peer[$key$US$REPLY]=1
+                    fi
                   else
                     snap[$key]+="$line$US"
                     if [ "$ind" = 4 ]; then
@@ -353,8 +362,8 @@ jobs:
               done
               return 1
             }
-            declare -A base_spec=() base_ver=() base_pkg=() base_snap=() base_eref=() base_edges=() base_line=()
-            declare -A new_spec=() new_ver=() new_pkg=() new_snap=() new_eref=() new_edges=() new_line=()
+            declare -A base_spec=() base_ver=() base_pkg=() base_snap=() base_eref=() base_edges=() base_peer=() base_line=()
+            declare -A new_spec=() new_ver=() new_pkg=() new_snap=() new_eref=() new_edges=() new_peer=() new_line=()
             graph "$work/base" base 0
             graph "$work/new" new 1
             # Roots: importer entries whose specifier changed.
@@ -427,6 +436,10 @@ jobs:
               done
             done
             # Peer variants of base entries: the largest set in which every dependency is allowed.
+            # A dependency of a variant may differ from the base entry's only by pointing at the
+            # same name@version with other peers, or, for a name the immutable base packages
+            # entry lists under peerDependencies, at a version in the changed subtree, another
+            # variant or the base (qa-58, #217). Any other change is a new dependency or version.
             declare -A bvar=() cand=()
             for k in "${!base_snap[@]}"; do
               s=${k%%(*}
@@ -450,11 +463,13 @@ jobs:
                   if [ -n "$r0" ] && [ "$r0" = "$r" ]; then continue; fi
                   tkey "$n" "$r"
                   t=$REPLY
-                  if [ -n "${reach[$t]-}" ]; then continue; fi
-                  if [ -n "$r0" ] && [ -n "${new_snap[$t]+x}" ]; then
-                    tkey "$n" "$r0"
-                    t0=$REPLY
-                    if [ "${t%%(*}" = "${t0%%(*}" ] && { [ -n "${cand[$t]-}" ] || [ -n "${base_snap[$t]+x}" ]; }; then continue; fi
+                  if [ -n "${new_snap[$t]+x}" ] && { [ -n "${reach[$t]-}${cand[$t]-}" ] || [ -n "${base_snap[$t]+x}" ]; }; then
+                    if [ -n "${base_peer[$s$US$n]-}" ]; then continue; fi
+                    if [ -n "$r0" ]; then
+                      tkey "$n" "$r0"
+                      t0=$REPLY
+                      if [ "${t%%(*}" = "${t0%%(*}" ]; then continue; fi
+                    fi
                   fi
                   ok=0
                   break
@@ -463,8 +478,15 @@ jobs:
               done
               return 1
             }
-            more=1
+            # Each round removes at least one candidate, so more rounds than candidates is a bug.
+            more=1 rounds=${#cand[@]}
             while [ "$more" = 1 ]; do
+              if [ "$rounds" -lt 0 ]; then
+                lockerr 1 "peer variant check did not settle. Commit this lockfile change in a reviewed PR."
+                cand=()
+                break
+              fi
+              rounds=$((rounds - 1))
               more=0
               for k in "${!cand[@]}"; do
                 if ! variant "$k"; then

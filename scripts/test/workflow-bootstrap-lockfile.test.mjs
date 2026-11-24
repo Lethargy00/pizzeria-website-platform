@@ -501,6 +501,8 @@ const addPackage = (entry) => (t) => t.replace('\nsnapshots:', `\n${entry}\nsnap
 const lockRejected = (r, name, re) => {
   assert.notEqual(r.status, 0, `${name} should be rejected:\n${r.stdout}${r.stderr}`);
   assert.match(r.stdout, re, name);
+  // The peer-variant fixpoint always settles; its round cap is only a safeguard.
+  assert.doesNotMatch(r.stdout, /peer variant check did not settle/, name);
 };
 
 test('verify: accepts a lockfile-only patch with registry packages and existing workspace links', () => {
@@ -979,7 +981,111 @@ test('verify (#196): rejects a registry version that no package.json change aske
       ],
       unreachable,
       DEV,
-      true,
+      2,
+    ],
+    // qa-58 (#217), repro 1: a forged peer suffix on a package whose specifier did not change
+    // re-points a dependency that is not a peer (eslint -> debug) at a version from the bump.
+    'forged peer suffix re-pointing a non-peer dependency': [
+      [
+        ...PRETTIER_BUMP,
+        [
+          '      debug: 4.0.0\n      left-pad: 1.3.0\n',
+          '      debug: 4.1.0\n      left-pad: 1.3.0\n',
+        ],
+        addPackage('  debug@4.1.0:\n    resolution: {integrity: sha512-GGGG==}\n'),
+        addSnapshot('  debug@4.1.0:\n    dependencies:\n      ms: 2.0.0\n'),
+        [
+          '        specifier: 9.0.0\n        version: 9.0.0\n',
+          '        specifier: 9.0.0\n        version: 9.0.0(z@1)\n',
+        ],
+        addSnapshot('  eslint@9.0.0(z@1):\n    dependencies:\n      debug: 4.1.0\n'),
+      ],
+      /new snapshots entry eslint@9\.0\.0\(z@1\) is not reachable/,
+    ],
+    // Only names under peerDependencies are peers, not those under peerDependenciesMeta.
+    'forged peer suffix re-pointing a name from peerDependenciesMeta': [
+      [
+        [
+          "      eslint: '>=9'\n",
+          "      eslint: '>=9'\n    peerDependenciesMeta:\n      debug:\n        optional: true\n",
+        ],
+        ...PRETTIER_BUMP,
+        [
+          '      debug: 4.0.0\n      left-pad: 1.3.0\n',
+          '      debug: 4.1.0\n      left-pad: 1.3.0\n',
+        ],
+        addPackage('  debug@4.1.0:\n    resolution: {integrity: sha512-GGGG==}\n'),
+        addSnapshot('  debug@4.1.0:\n    dependencies:\n      ms: 2.0.0\n'),
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(z@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)(z@1):\n    dependencies:\n      debug: 4.1.0\n      eslint: 9.0.0\n',
+        ),
+      ],
+      /new snapshots entry plugin@2\.0\.0\(eslint@9\.0\.0\)\(z@1\) is not reachable/,
+      BUMPED,
+      1,
+    ],
+    // A declared peer may only point at an entry that exists and is allowed.
+    'peer variant pointing a peer at a missing entry': [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.9.9)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.9.9):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.9.9\n',
+        ),
+      ],
+      /new snapshots entry plugin@2\.0\.0\(eslint@9\.9\.9\) is not reachable/,
+      DEV,
+    ],
+    // qa-58 (#217), repro 2: the same trick adds a dependency name from the bumped subtree.
+    'forged peer suffix adding a dependency from the bump': [
+      [
+        ...PRETTIER_BUMP,
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(z@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)(z@1):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.0.0\n      left-pad: 1.3.0\n',
+        ),
+      ],
+      /new snapshots entry plugin@2\.0\.0\(eslint@9\.0\.0\)\(z@1\) is not reachable/,
+    ],
+    // qa-58 (#217): a peer-only importer change whose new variant has no snapshots entry.
+    'no snapshots entry for a peer-only importer change': [
+      [
+        ...ESLINT_BUMP.slice(0, 4),
+        [
+          '  plugin@2.0.0(eslint@9.0.0):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.0.0\n',
+          '',
+        ],
+      ],
+      /no snapshots entry for plugin@2\.0\.0\(eslint@9\.1\.0\)/,
+      { ...DEV, eslint: '9.1.0' },
+    ],
+    'importer path that is not plain': [
+      [
+        (t) =>
+          t.replace(
+            '\npackages:\n',
+            "\n  './':\n    devDependencies:\n      prettier:\n        specifier: 3.6.3\n        version: 3.6.3\n\npackages:\n",
+          ),
+        ...PRETTIER_BUMP.slice(1),
+        ['        specifier: 3.6.2\n        version: 3.6.2\n', ''],
+      ],
+      /importer \.\/ is not a plain relative path/,
+    ],
+    // ALIAS is anchored: only the tail of npm:../x@1.0.0 looks like name@version.
+    'malformed npm: specifier': [
+      [
+        [
+          '        specifier: 3.6.2\n        version: 3.6.2\n',
+          '        specifier: npm:../x@1.0.0\n        version: ../x@1.0.0\n',
+        ],
+        [
+          '  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n',
+          '  ../x@1.0.0:\n    resolution: {integrity: sha512-XXXX==}\n',
+        ],
+        ['  prettier@3.6.2: {}\n', '  ../x@1.0.0: {}\n'],
+      ],
+      /specifier npm:\.\.\/x@1\.0\.0 in importer \. is not an exact version or npm:name@version/,
+      { ...DEV, prettier: 'npm:../x@1.0.0' },
     ],
     'new packages entry without a snapshots entry': [
       [...PRETTIER_BUMP, addPackage('  evil@1.0.0:\n    resolution: {integrity: sha512-XXXX==}\n')],
@@ -990,14 +1096,14 @@ test('verify (#196): rejects a registry version that no package.json change aske
       /no snapshots entry for prettier@3\.6\.3/,
     ],
   };
-  // With `inBase`, the first two edits go into the base lockfile instead of the patch.
-  for (const [name, [pairs, re, dev = BUMPED, inBase = false]] of Object.entries(cases)) {
+  // The first `inBase` edits go into the base lockfile instead of the patch.
+  for (const [name, [pairs, re, dev = BUMPED, inBase = 0]] of Object.entries(cases)) {
     const pj =
       dev === 'in dependencies'
         ? pkgJson({ dependencies: { prettier: '3.6.3' }, devDependencies: DEV })
         : pkgJson({ devDependencies: dev });
-    const base = inBase ? edits(...pairs.slice(0, 2))(LOCK_GRAPH) : LOCK_GRAPH;
-    const patch = inBase ? pairs.slice(2) : pairs;
+    const base = edits(...pairs.slice(0, inBase))(LOCK_GRAPH);
+    const patch = pairs.slice(inBase);
     lockRejected(lockVerify(edits(...patch), base, { 'package.json': pj }), name, re);
   }
 });
@@ -1150,6 +1256,18 @@ test('verify (#196): rejects lockfile layouts that the graph parser does not rea
     'flow-style entry': [
       ['  prettier@3.6.2: {}\n', '  prettier@3.6.2: {dependencies: {evil: 1.0.0}}\n'],
       /entry that is not 'key:' or 'key: \{\}'/,
+    ],
+    'line outside an entry': [
+      ['\npackages:\n', '\npackages:\n    stray: 1\n'],
+      /line outside a packages entry/,
+    ],
+    'dependency that is not name: version': [
+      ['      ms: 2.0.0\n', '      - ms\n'],
+      /dependency of debug@4\.0\.0 that is not 'name: version'/,
+    ],
+    'nested value under dependencies': [
+      ['      ms: 2.0.0\n', '      ms: 2.0.0\n        x: 1\n'],
+      /nested value under the dependencies of debug@4\.0\.0/,
     ],
     comment: [
       ['      ms: 2.0.0\n', '      ms: 2.0.0 # 2.1.0\n'],
