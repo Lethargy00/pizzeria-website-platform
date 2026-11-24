@@ -17,6 +17,16 @@
  *   `invalid_input` before the clock is read.
  * - Tolerates a clock that steps backwards (e.g. an NTP step): `times` stays sorted and
  *   `expiresAt` never moves earlier, so a key's counter is never reset early (#174).
+ * - Bounds how far ahead of the clock an entry can reach. Suppose the clock jumps far forward
+ *   and then comes back. Every hit logged during the jump would be in the future, and the
+ *   key could stay in the store for the length of the jump. A large jump could then fill the
+ *   store. So when an entry is read or swept at `t`, a logged hit later than `t + windowMs` is
+ *   capped at `t + windowMs`, and `expiresAt` at `t + 2 * windowMs` (`windowMs` is the largest
+ *   window the key has used). A capped hit still counts for at least a full window from now,
+ *   and it really happened before now, so the counter is never reset early (fails closed). A
+ *   backwards step of up to one window is not changed. After any jump, the store frees itself
+ *   within two windows of real time, counted from the first call after the clock comes back
+ *   (#189).
  * - JavaScript is single-threaded and `hit` has no `await` between read and write, so it is
  *   atomic per key.
  */
@@ -55,6 +65,8 @@ interface Entry {
   times: number[];
   /** Time (ms) after which the whole entry can be dropped. */
   expiresAt: number;
+  /** Largest window (ms) this key has been hit with. Bounds how far ahead it can reach (#189). */
+  windowMs: number;
 }
 
 function misconfigured(message: string): AdapterError {
@@ -73,8 +85,23 @@ export function createMemoryRateLimitStore(
   if (!Number.isSafeInteger(maxKeys) || maxKeys < 1) throw misconfigured('maxKeys must be >= 1');
   const entries = new Map<string, Entry>();
 
+  /**
+   * Caps an entry that reaches too far ahead of `t` (#189). An entry that only took a backwards
+   * step of up to one window is left exactly as it is (#174).
+   */
+  function normalize(e: Entry, t: number): void {
+    const maxTime = t + e.windowMs;
+    if (e.expiresAt <= maxTime + e.windowMs) return;
+    // `times` stays ascending: the capped values are the last ones and are all equal.
+    e.times = e.times.map((x) => Math.min(x, maxTime));
+    e.expiresAt = maxTime + e.windowMs;
+  }
+
   function sweep(t: number): void {
-    for (const [k, e] of entries) if (e.expiresAt <= t) entries.delete(k);
+    for (const [k, e] of entries) {
+      normalize(e, t);
+      if (e.expiresAt <= t) entries.delete(k);
+    }
   }
 
   function decide(key: unknown, window: unknown): RateLimitResult {
@@ -113,9 +140,11 @@ export function createMemoryRateLimitStore(
       if (entries.size >= maxKeys) {
         throw new AdapterError('rateLimit', NAME, 'unavailable', 'rate-limit store is full');
       }
-      entry = { times: [], expiresAt: 0 };
+      entry = { times: [], expiresAt: 0, windowMs };
       entries.set(key, entry);
     }
+    entry.windowMs = Math.max(entry.windowMs, windowMs);
+    normalize(entry, t);
     // Drop hits that left the window (a hit exactly one window old has left it).
     // After a backwards clock step a logged hit can be later than `t`; it is still in the window
     // (fails closed) until the clock passes it by a full window (#174).

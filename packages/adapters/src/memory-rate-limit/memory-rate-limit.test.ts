@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdapterError } from '../interfaces/index.js';
 import type { RateLimitKey } from '../interfaces/index.js';
 import { MAX_LIMIT, createMemoryRateLimitStore, factory } from './index.js';
@@ -441,6 +441,142 @@ describe('memory-rate-limit', () => {
       // The 600 s hit is still live, so sweep must not free the slot.
       await expect(s.hit(key('b'), w)).rejects.toMatchObject({ code: 'unavailable' });
       expect((await s.hit(key('a'), { limit: 1, windowSeconds: 600 })).allowed).toBe(false);
+    });
+  });
+
+  describe('a large forward clock jump and return does not fill the store (#189)', () => {
+    // These use vitest fake timers and the store's default clock (`Date.now`).
+    const T0 = new Date('2026-03-29T00:30:00Z').getTime();
+    const DAY = 86_400_000;
+    const w = { limit: 1, windowSeconds: 60 };
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(T0);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('frees the store within two windows after the clock comes back', async () => {
+      const s = createMemoryRateLimitStore({ maxKeys: 3 });
+      vi.setSystemTime(T0 + DAY); // the clock jumps a day ahead
+      for (let i = 1; i <= 3; i++) expect((await s.hit(key('j', i), w)).allowed).toBe(true);
+      await expect(s.hit(key('n', 1), w)).rejects.toMatchObject({ code: 'unavailable' });
+      vi.setSystemTime(T0 + 1_000); // and comes back
+      // Still full, and fails closed: the hits from the jump still count for a while.
+      await expect(s.hit(key('n', 1), w)).rejects.toMatchObject({ code: 'unavailable' });
+      vi.advanceTimersByTime(120_000); // two windows of real time, not a day
+      expect((await s.hit(key('n', 1), w)).allowed).toBe(true);
+      expect(s.size).toBe(1);
+      for (let i = 2; i <= 3; i++) expect((await s.hit(key('n', i), w)).allowed).toBe(true);
+    });
+
+    it('memory stays bounded across repeated jumps', async () => {
+      const s = createMemoryRateLimitStore({ maxKeys: 5 });
+      let n = 0;
+      for (let round = 0; round < 10; round++) {
+        const base = T0 + round * 200_000;
+        vi.setSystemTime(base + DAY);
+        for (let i = 0; i < 5; i++) await s.hit(key('j', ++n), w).catch(() => undefined);
+        vi.setSystemTime(base);
+        // The first call after the return is when the store sees the clock come back.
+        await expect(s.hit(key('p', round + 1), w)).rejects.toMatchObject({
+          code: 'unavailable',
+        });
+        expect(s.size).toBeLessThanOrEqual(5);
+        vi.advanceTimersByTime(120_000);
+        expect((await s.hit(key('n', round + 1), w)).allowed).toBe(true);
+        expect(s.size).toBeLessThanOrEqual(5);
+      }
+    });
+
+    it('keys hit during the jump stay blocked for a full window after the return', async () => {
+      const s = createMemoryRateLimitStore();
+      const k = key('a');
+      vi.setSystemTime(T0 + DAY);
+      expect((await s.hit(k, w)).allowed).toBe(true);
+      vi.setSystemTime(T0);
+      // Capped at one window ahead, so blocked for two windows from now and never reset early.
+      expect(await s.hit(k, w)).toMatchObject({ allowed: false, retryAfterSeconds: 120 });
+      vi.advanceTimersByTime(119_999);
+      expect((await s.hit(k, w)).allowed).toBe(false);
+      // That blocked hit counts too, so the key frees one window after it.
+      vi.advanceTimersByTime(60_001);
+      expect((await s.hit(k, w)).allowed).toBe(true);
+    });
+
+    it('a step back of exactly one window is not capped (#174 behaviour)', async () => {
+      const s = createMemoryRateLimitStore();
+      const k = key('a');
+      expect((await s.hit(k, w)).allowed).toBe(true); // T0, leaves at T0+60
+      vi.setSystemTime(T0 - 60_000);
+      expect(await s.hit(k, w)).toMatchObject({ allowed: false, retryAfterSeconds: 120 });
+      vi.advanceTimersByTime(119_999);
+      expect((await s.hit(k, w)).allowed).toBe(false);
+    });
+
+    it('a step back of more than one window is capped at one window ahead', async () => {
+      const s = createMemoryRateLimitStore({ maxKeys: 1 });
+      const k = key('a');
+      expect((await s.hit(k, w)).allowed).toBe(true); // T0
+      vi.setSystemTime(T0 - 10 * 60_000); // 10 min back
+      // Without the cap this would be 660 s; capped, the T0 hit counts as now + 60 s.
+      expect(await s.hit(k, w)).toMatchObject({ allowed: false, retryAfterSeconds: 120 });
+      vi.advanceTimersByTime(119_999);
+      expect((await s.hit(k, w)).allowed).toBe(false);
+    });
+
+    it('sweep caps an entry that is never hit again', async () => {
+      const s = createMemoryRateLimitStore({ maxKeys: 1 });
+      vi.setSystemTime(T0 + DAY);
+      expect((await s.hit(key('a'), w)).allowed).toBe(true);
+      vi.setSystemTime(T0);
+      await expect(s.hit(key('b'), w)).rejects.toMatchObject({ code: 'unavailable' });
+      vi.advanceTimersByTime(119_999); // capped expiry is T0+120
+      await expect(s.hit(key('b'), w)).rejects.toMatchObject({ code: 'unavailable' });
+      vi.advanceTimersByTime(1);
+      expect((await s.hit(key('b'), w)).allowed).toBe(true);
+      expect(s.size).toBe(1);
+    });
+
+    it('caps by the largest window a key has used, not the latest one', async () => {
+      const s = createMemoryRateLimitStore({ maxKeys: 1 });
+      const long = { limit: 1, windowSeconds: 600 };
+      vi.setSystemTime(T0 + 300_000);
+      expect((await s.hit(key('a'), long)).allowed).toBe(true);
+      expect((await s.hit(key('a'), w)).allowed).toBe(false);
+      vi.setSystemTime(T0); // 5 min back: within the 600 s window, so nothing is capped
+      vi.advanceTimersByTime(599_000); // T0+599: the hit is live until T0+900
+      await expect(s.hit(key('b'), w)).rejects.toMatchObject({ code: 'unavailable' });
+      expect((await s.hit(key('a'), long)).allowed).toBe(false);
+    });
+
+    it('normal forward time still works, across a DST change', async () => {
+      // 2026-03-29 01:00 UTC is the EU spring-forward. Date.now() is UTC, so it is no jump.
+      const s = createMemoryRateLimitStore({ maxKeys: 2 });
+      const k = key('a');
+      const r = { limit: 2, windowSeconds: 3_600 };
+      expect((await s.hit(k, r)).allowed).toBe(true); // 00:30Z
+      vi.advanceTimersByTime(30 * 60_000); // 01:00Z
+      expect((await s.hit(k, r)).allowed).toBe(true);
+      // Blocked, and this hit counts too, so two 01:00 hits hold the key until 02:00.
+      expect(await s.hit(k, r)).toMatchObject({ allowed: false, retryAfterSeconds: 3_600 });
+      vi.advanceTimersByTime(30 * 60_000); // 01:30Z: the 00:30 hit left; 01:00 pair still in
+      expect((await s.hit(k, r)).allowed).toBe(false);
+      vi.advanceTimersByTime(3_600_000);
+      expect((await s.hit(k, r)).allowed).toBe(true);
+      expect((await s.hit(key('b'), r)).allowed).toBe(true);
+      expect(s.size).toBe(2);
+    });
+
+    it('a forward jump with no return still drops expired keys', async () => {
+      const s = createMemoryRateLimitStore({ maxKeys: 2 });
+      await s.hit(key('a', 1), w);
+      await s.hit(key('a', 2), w);
+      vi.setSystemTime(T0 + DAY);
+      expect((await s.hit(key('a', 3), w)).allowed).toBe(true);
+      expect(s.size).toBe(1);
     });
   });
 
