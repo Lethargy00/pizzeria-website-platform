@@ -39,4 +39,7 @@ body:
     id: touches
     attributes:
       label: Touches
-      description: Paths the fix may modify (filled in at triage)
+      description: |
+        One backticked path or glob per list item, for example:
+        - `packages/ui/src/components/Hero/**`
+        - `docs/guides/**`

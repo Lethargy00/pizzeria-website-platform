@@ -41,7 +41,10 @@ body:
     id: touches
     attributes:
       label: Touches
-      description: Exact paths/globs this issue may modify, e.g. packages/ui/src/components/Hero/**
+      description: |
+        One backticked path or glob per list item, for example:
+        - `packages/ui/src/components/Hero/**`
+        - `docs/guides/**`
     validations:
       required: true
   - type: textarea
