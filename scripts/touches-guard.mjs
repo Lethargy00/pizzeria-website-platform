@@ -87,20 +87,67 @@ export function stripFences(text) {
   return out.join('\n');
 }
 
-/** Issue number from the first "Closes/Fixes/Resolves #n" in a PR body, outside code fences. */
-export function closedIssue(body) {
-  const m = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/i.exec(stripFences(body));
-  return m ? Number(m[1]) : null;
+/** Columns of leading whitespace (a tab advances to the next multiple of 4, as in CommonMark). */
+function indentWidth(line) {
+  let col = 0;
+  for (const ch of line) {
+    if (ch === ' ') col += 1;
+    else if (ch === '\t') col += 4 - (col % 4);
+    else break;
+  }
+  return col;
 }
 
 /**
+ * Markdown with fenced code blocks, indented code and blockquotes removed (#148, #191): only
+ * "plain" lines are left. A line indented 4 or more columns is dropped (indented code, or a
+ * deeply nested list continuation; dropping both fails closed). A line whose first character
+ * after up to 3 spaces is `>` starts a blockquote, and every following non-blank line is dropped
+ * too until a blank line, because Markdown continues a quoted paragraph lazily onto unmarked
+ * lines. Removed lines become blank lines.
+ */
+export function plainLines(text) {
+  let quoted = false;
+  return stripFences(text)
+    .split('\n')
+    .map((line) => {
+      if (!line.trim()) {
+        quoted = false;
+        return line;
+      }
+      if (/^ {0,3}>/.test(line)) quoted = true;
+      if (quoted || indentWidth(line) >= 4) return '';
+      return line;
+    })
+    .join('\n');
+}
+
+/**
+ * Issue number from the first "Closes/Fixes/Resolves #n" in a PR body, on a plain line: never
+ * inside a fenced or indented code block or a blockquote (#148, #191).
+ */
+export function closedIssue(body) {
+  const m = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/i.exec(plainLines(body));
+  return m ? Number(m[1]) : null;
+}
+
+/** A Markdown list item (`-`, `*`, `+`, `1.` or `1)`, up to 3 leading spaces): its text. */
+const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+(.*)$/;
+
+/**
  * Backticked globs from the "## Touches" section (markdown) or the "### Touches" issue-form
- * section, ignoring fenced code blocks (#148).
+ * section, ignoring fenced code blocks (#148). Globs are read only from list items, one or more
+ * inline code spans on the item's own line; prose, quoted, indented and continuation lines are
+ * ignored, and a code span never crosses a line break (#191).
  */
 export function parseTouches(body) {
   const m = /^#{2,3}\s*Touches\s*$([\s\S]*?)(?=^#{2,3}\s|(?![\s\S]))/im.exec(stripFences(body));
   if (!m) return [];
-  return [...m[1].matchAll(/`([^`]+)`/g)].map((x) => x[1].trim()).filter(Boolean);
+  return m[1]
+    .split('\n')
+    .map((line) => LIST_ITEM.exec(line)?.[1] ?? '')
+    .flatMap((item) => [...item.matchAll(/`([^`\n]+)`/g)].map((x) => x[1].trim()))
+    .filter(Boolean);
 }
 
 export function outside(files, globs) {
