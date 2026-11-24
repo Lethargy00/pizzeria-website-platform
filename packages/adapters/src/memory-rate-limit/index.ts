@@ -16,7 +16,8 @@
  *   rejects with `unavailable` and records nothing (#159). Bad key or window types reject with
  *   `invalid_input` before the clock is read.
  * - Tolerates a clock that steps backwards (e.g. an NTP step): `times` stays sorted and
- *   `expiresAt` never moves earlier, so a key's counter is never reset early (#174).
+ *   `expiresAt` never moves earlier (except for the #189 cap below, which only applies to a step
+ *   of more than one window), so a key's counter is never reset early (#174).
  * - Bounds how far ahead of the clock an entry can reach. Suppose the clock jumps far forward
  *   and then comes back. Every hit logged during the jump would be in the future, and the
  *   key could stay in the store for the length of the jump. A large jump could then fill the
@@ -24,9 +25,10 @@
  *   capped at `t + windowMs`, and `expiresAt` at `t + 2 * windowMs` (`windowMs` is the largest
  *   window the key has used). A capped hit still counts for at least a full window from now,
  *   and it really happened before now, so the counter is never reset early (fails closed). A
- *   backwards step of up to one window is not changed. After any jump, the store frees itself
- *   within two windows of real time, counted from the first call after the clock comes back
- *   (#189).
+ *   backwards step of up to one window is not changed. After any jump, a key leaves the store
+ *   within two of its largest windows of real time (so at most two days), counted from the
+ *   first call after the clock comes back. `windowMs` is updated with the current hit's
+ *   window before the cap runs, so that window counts too (#189).
  * - JavaScript is single-threaded and `hit` has no `await` between read and write, so it is
  *   atomic per key.
  */

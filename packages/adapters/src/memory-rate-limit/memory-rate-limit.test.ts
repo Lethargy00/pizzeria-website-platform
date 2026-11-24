@@ -552,6 +552,53 @@ describe('memory-rate-limit', () => {
       expect((await s.hit(key('a'), long)).allowed).toBe(false);
     });
 
+    it('caps by the largest window when a short window came first (fails closed)', async () => {
+      // Without tracking the largest window, `a` would be capped by its first (60 s) window and
+      // evicted after 120 s while its 600 s hit is still live, resetting its counter early.
+      const s = createMemoryRateLimitStore({ maxKeys: 1 });
+      const short = { limit: 5, windowSeconds: 60 };
+      const long = { limit: 1, windowSeconds: 600 };
+      vi.setSystemTime(T0 + DAY);
+      expect((await s.hit(key('a'), short)).allowed).toBe(true);
+      expect((await s.hit(key('a'), long)).allowed).toBe(false);
+      vi.setSystemTime(T0);
+      await expect(s.hit(key('b'), short)).rejects.toMatchObject({ code: 'unavailable' });
+      vi.advanceTimersByTime(130_000);
+      await expect(s.hit(key('b'), short)).rejects.toMatchObject({ code: 'unavailable' });
+      expect((await s.hit(key('a'), long)).allowed).toBe(false);
+    });
+
+    it("the current hit's window counts before the cap runs", async () => {
+      const s = createMemoryRateLimitStore();
+      vi.setSystemTime(T0 + DAY);
+      expect((await s.hit(key('a'), w)).allowed).toBe(true);
+      vi.setSystemTime(T0);
+      // Capped by 600 s (not the stored 60 s): the jump hit counts as T0+600, left at T0+1200.
+      expect(await s.hit(key('a'), { limit: 1, windowSeconds: 600 })).toMatchObject({
+        allowed: false,
+        retryAfterSeconds: 1_200,
+      });
+    });
+
+    it('a step back of one window + 1 ms is capped at t+2W, not later', async () => {
+      const s = createMemoryRateLimitStore();
+      const k = key('a');
+      expect((await s.hit(k, w)).allowed).toBe(true); // T0
+      vi.setSystemTime(T0 - 60_001);
+      // Uncapped it would be 120.001 s (121). Capped: the T0 hit counts as now + 60 s.
+      expect(await s.hit(k, w)).toMatchObject({ allowed: false, retryAfterSeconds: 120 });
+    });
+
+    it('a step back of less than one window does not extend the expiry (#174)', async () => {
+      const s = createMemoryRateLimitStore({ maxKeys: 1 });
+      expect((await s.hit(key('a'), w)).allowed).toBe(true); // T0, expires at T0+60
+      vi.setSystemTime(T0 - 30_000);
+      await expect(s.hit(key('b'), w)).rejects.toMatchObject({ code: 'unavailable' });
+      vi.setSystemTime(T0 + 60_000);
+      expect((await s.hit(key('b'), w)).allowed).toBe(true);
+      expect(s.size).toBe(1);
+    });
+
     it('normal forward time still works, across a DST change', async () => {
       // 2026-03-29 01:00 UTC is the EU spring-forward. Date.now() is UTC, so it is no jump.
       const s = createMemoryRateLimitStore({ maxKeys: 2 });
