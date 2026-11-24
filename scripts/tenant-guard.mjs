@@ -22,8 +22,12 @@ const ALLOWED_NAMES = new Set(['.gitkeep', 'README.md']);
 // case-sensitively: on a case-insensitive checkout "Assets/" would resolve to "assets/" yet escape
 // every assets/ rule below.
 export const TENANT_FOLDERS = new Set(['assets', 'content']);
+// Must cover the basename of every review-gate DEPENDENCY_PATHS entry (#192); the drift test in
+// scripts/test/tenant-guard-names.test.mjs fails when one is missing.
 export const FORBIDDEN_NAMES = [
   /^package\.json$/i,
+  /^package\.json5$/i,
+  /^package\.yaml$/i,
   /^package-lock\.json$/i,
   /^pnpm-lock\.yaml$/i,
   /^pnpm-workspace\.yaml$/i,
@@ -33,6 +37,7 @@ export const FORBIDDEN_NAMES = [
   /^\.npmrc$/i,
   /^\.yarnrc(\.yml)?$/i,
   /^\.pnpmfile\.cjs$/i,
+  /^\.pnpmfile\.mjs$/i,
   /^node_modules$/i,
   /^import-?map\.json$/i,
   /^deno\.jsonc?$/i,
