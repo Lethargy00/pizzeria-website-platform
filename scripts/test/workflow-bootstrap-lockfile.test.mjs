@@ -265,7 +265,16 @@ test('allow-list: every path review-gate sends to a non-peer reviewer is refused
 
 const verifyStep = steps('push').find((s) => /^ {6}- id: verify$/m.test(s));
 const VERIFY = runScript(verifyStep);
-const ENV = { FORMAT_PATHS: topEnv('FORMAT_PATHS'), PROTECTED_PATHS: topEnv('PROTECTED_PATHS') };
+const ENV_NAMES = [
+  'FORMAT_PATHS',
+  'PROTECTED_PATHS',
+  'CODE_PATHS',
+  'LOCK_TARBALL',
+  'LOCK_SPECIAL',
+  'LOCK_FORM',
+  'LOCK_DEPRECATED',
+];
+const ENV = Object.fromEntries(ENV_NAMES.map((n) => [n, topEnv(n)]));
 
 const git = (cwd, ...args) => {
   const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
@@ -289,6 +298,7 @@ const BASE = {
   'docs/GUIDE.md': '# Guide\n',
   'docs/SECURITY.md': '# Security\n',
   'packages/ui/src/a.ts': "export const a = 'a';\n",
+  'packages/ui/src/styles.css': 'a { color: red }\n',
   'packages/cli/src/b.ts': 'export {};\n',
   'packages/ui/src/sanitize.ts': 'export {};\n',
   'tenants/demo/site.json': '{}\n',
@@ -301,13 +311,14 @@ const BASE = {
 
 // Builds a repo from BASE (minus `omit`), applies `change`, turns it into a patch, resets, then
 // runs the workflow's verify script. Returns the bash result.
-function verify(change, { omit = [] } = {}) {
+function verify(change, { omit = [], base = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pwp-bootstrap-'));
   try {
     const repo = join(dir, 'repo');
     mkdirSync(repo);
     git(repo, 'init', '-q');
-    for (const [rel, text] of Object.entries(BASE)) if (!omit.includes(rel)) put(repo, rel, text);
+    for (const [rel, text] of Object.entries({ ...BASE, ...base }))
+      if (!omit.includes(rel)) put(repo, rel, text);
     git(repo, 'add', '-A');
     git(repo, 'commit', '-qm', 'base');
     change(repo);
@@ -343,7 +354,7 @@ test('verify: accepts lockfile changes and formatting of ordinary files', () => 
     verify((r) => {
       put(r, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\nimporters: {}\n");
       put(r, 'docs/GUIDE.md', '# Guide\n\nText\n');
-      put(r, 'packages/ui/src/a.ts', "export const a = 'a'\n");
+      put(r, 'packages/ui/src/styles.css', 'a {\n  color: red;\n}\n');
     }),
   );
 });
@@ -380,7 +391,7 @@ test('verify: rejects protected, new, deleted, mode-changed and symlinked paths'
       change(repo);
     });
     assert.notEqual(r.status, 0, `${name} should be rejected:\n${r.stdout}${r.stderr}`);
-    assert.match(r.stdout, /outside the allow-list/, name);
+    assert.match(r.stdout, /outside the allow-list|code file changed/, name);
   }
   // FORMAT_PATHS on its own: an existing, unprotected, mode-100644 file without a Prettier
   // extension may not be modified, even without a lockfile change alongside.
@@ -409,4 +420,276 @@ test('verify: a patch that does not apply is rejected', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- #177: code files are never auto-pushed ----
+
+test('verify: a formatting change to any code file fails the run instead of being pushed', () => {
+  const code = [
+    'packages/ui/src/a.ts',
+    'packages/ui/src/b.tsx',
+    'packages/ui/src/c.mts',
+    'packages/ui/src/d.cts',
+    'packages/ui/src/e.js',
+    'packages/ui/src/f.jsx',
+    'packages/ui/src/g.mjs',
+    'packages/ui/src/h.cjs',
+    'packages/ui/src/Card.astro',
+    'packages/ui/src/i.mdx',
+    'playground/index.html',
+    'playground/legacy.htm',
+    'packages/ui/src/j.vue',
+    'packages/ui/src/k.svelte',
+  ];
+  const base = Object.fromEntries(code.map((f) => [f, 'x\n']));
+  for (const f of code) {
+    const r = verify((repo) => put(repo, f, 'y\n'), { base });
+    assert.notEqual(r.status, 0, `${f} should fail:\n${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /code file changed \(status M\)/, f);
+  }
+  // FORMAT_PATHS itself lists no code extension, so CODE_PATHS is not the only thing in the way.
+  const format = new RegExp(topEnv('FORMAT_PATHS'));
+  for (const f of code) assert.ok(!format.test(f), `FORMAT_PATHS matches ${f}`);
+});
+
+// ---- #177: lockfile content ----
+
+const LOCK_BASE = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      prettier:
+        specifier: 3.6.2
+        version: 3.6.2
+
+  packages/ui:
+    dependencies:
+      '@pwp/core':
+        specifier: workspace:*
+        version: link:../core
+
+packages:
+
+  prettier@3.6.2:
+    resolution: {integrity: sha512-AAAA==}
+    engines: {node: '>=14'}
+    hasBin: true
+
+snapshots:
+
+  prettier@3.6.2: {}
+`;
+// The base lockfile with `edit` applied (a [from, to] pair, or a function of the text), as a
+// lockfile-only patch.
+const lockVerify = (edit, base = LOCK_BASE) => {
+  const next = typeof edit === 'function' ? edit(base) : base.replace(edit[0], edit[1]);
+  assert.notEqual(next, base, 'the fixture edit changes the lockfile');
+  return verify((r) => put(r, 'pnpm-lock.yaml', next), { base: { 'pnpm-lock.yaml': base } });
+};
+const addPackage = (entry) => (t) => t.replace('\nsnapshots:', `\n${entry}\nsnapshots:`);
+const lockRejected = (r, name, re) => {
+  assert.notEqual(r.status, 0, `${name} should be rejected:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, re, name);
+};
+
+test('verify: accepts a lockfile-only patch with registry packages and existing workspace links', () => {
+  const added = [
+    '  rimraf@3.0.2:',
+    '    resolution: {integrity: sha512-BBBB==}',
+    "    deprecated: Rimraf versions prior to v4 aren't supported, see https://github.com/isaacs/rimraf",
+    '    hasBin: true',
+    '',
+    '  left-pad@1.3.0:',
+    '    resolution: {integrity: sha512-CCCC==, tarball: https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz}',
+    '',
+  ].join('\n');
+  ok(
+    lockVerify((t) =>
+      addPackage(added)(t).replace(
+        '        version: 3.6.2\n',
+        '        version: 3.6.2\n      rimraf:\n        specifier: 3.0.2\n        version: 3.0.2\n',
+      ),
+    ),
+  );
+  // Removing an entry, including a link, is fine.
+  ok(
+    lockVerify([
+      "      '@pwp/core':\n        specifier: workspace:*\n        version: link:../core\n",
+      '',
+    ]),
+  );
+});
+
+test('verify: the real lockfile on main passes the lockfile content checks', () => {
+  const real = readFileSync(join(ROOT, 'pnpm-lock.yaml'), 'utf8');
+  ok(lockVerify((t) => `${t}\n`, real));
+  ok(
+    lockVerify(
+      (t) =>
+        t.replace(
+          /\npackages:\n/,
+          '\npackages:\n\n  zzz-new@1.0.0:\n    resolution: {integrity: sha512-ZZZZ==}\n',
+        ),
+      real,
+    ),
+  );
+});
+
+test('verify: rejects a tarball that is not on https://registry.npmjs.org/', () => {
+  const re = /file=pnpm-lock\.yaml,line=\d+,.*tarball is not on https:\/\/registry\.npmjs\.org\//;
+  const tarballs = {
+    'other host': '{integrity: sha512-X==, tarball: https://evil.example/x.tgz}',
+    'look-alike host': '{tarball: https://registry.npmjs.org.evil.example/x.tgz}',
+    'userinfo host': '{tarball: https://registry.npmjs.org@evil.example/x.tgz}',
+    port: '{tarball: https://registry.npmjs.org:8443/x.tgz}',
+    'plain http': '{tarball: http://registry.npmjs.org/x/-/x-1.0.0.tgz}',
+    'file tarball': '{tarball: file:vendor/x.tgz}',
+    'quoted key': "{'tarball': https://evil.example/x.tgz}",
+    'second tarball':
+      '{tarball: https://registry.npmjs.org/x.tgz, tarball: https://evil.example/x.tgz}',
+  };
+  for (const [name, res] of Object.entries(tarballs)) {
+    lockRejected(lockVerify(addPackage(`  x@1.0.0:\n    resolution: ${res}\n`)), name, re);
+  }
+  lockRejected(
+    lockVerify(
+      addPackage('  x@1.0.0:\n    resolution:\n      tarball: https://evil.example/x.tgz\n'),
+    ),
+    'block style',
+    re,
+  );
+});
+
+test('verify: rejects git, URL, file: and link: entries the base lockfile does not have', () => {
+  const re =
+    /file=pnpm-lock\.yaml,line=\d+,.*git, URL, file: or link: entry that the base lockfile does not have/;
+  const cases = {
+    'git resolution': addPackage(
+      '  x@git+https://github.com/a/x.git#abc:\n    resolution: {commit: abc, repo: https://github.com/a/x.git, type: git}\n',
+    ),
+    'URL version': [
+      '        version: 3.6.2\n',
+      '        version: https://codeload.github.com/a/x/tar.gz/abc\n',
+    ],
+    'URL with another scheme': [
+      '        version: 3.6.2\n',
+      '        version: ftp://evil.example/x.tgz\n',
+    ],
+    'ssh: shorthand': ['        version: 3.6.2\n', '        version: ssh:evil.example/x\n'],
+    'git+ssh: shorthand': ['        version: 3.6.2\n', '        version: git+ssh:evil.example/x\n'],
+    'commit-only resolution': addPackage('  x@1.0.0:\n    resolution: {commit: abc}\n'),
+    'github shorthand': ['        version: 3.6.2\n', '        version: github:a/x#abc\n'],
+    'scp-style git': ['        version: 3.6.2\n', '        version: git@github.com:a/x.git\n'],
+    'file: directory': addPackage(
+      '  x@file:../evil:\n    resolution: {directory: ../evil, type: directory}\n',
+    ),
+    'file: version': ['        version: 3.6.2\n', '        version: file:../evil\n'],
+    'new link:': ['version: link:../core', 'version: link:../../../evil'],
+    'existing link moved to another importer': [
+      '        version: 3.6.2\n',
+      "        version: 3.6.2\n      '@pwp/core':\n        specifier: workspace:*\n        version: link:../core\n",
+    ],
+    'existing link copied into packages after a blank line': addPackage(
+      "  packages/ui:\n    dependencies:\n      '@pwp/core':\n        specifier: workspace:*\n        version: link:../core\n",
+    ),
+    'URL in a field that is not a deprecation message': addPackage(
+      '  x@1.0.0:\n    resolution: {integrity: sha512-X==}\n    homepage: https://evil.example\n',
+    ),
+  };
+  for (const [name, edit] of Object.entries(cases)) lockRejected(lockVerify(edit), name, re);
+});
+
+test('verify: rejects lockfile YAML that could hide or move an entry from the line checks', () => {
+  const form = /line=\d+,.*YAML anchor, alias, tag, merge key, document marker, explicit key/;
+  const chars = /line=\d+,.*tab, carriage return, backslash escape or Unicode line break/;
+  const expect = {
+    // security-29 (#195): '"' has an even count of both quote characters, so only the
+    // double-quote ban sees the open "..." that turns the next lines into fake parent keys.
+    'double-quoted value spoofing parent keys':
+      /line=\d+,.*double quote: pnpm writes single quotes/,
+    'double-quoted value': /line=\d+,.*double quote: pnpm writes single quotes/,
+    'multi-line flow mapping': /line=\d+,.*flow mapping spans lines/,
+    'multi-line flow sequence': /line=\d+,.*flow sequence spans lines/,
+    'multi-line quoted value': /line=\d+,.*quoted value spans lines/,
+    'backslash escape': chars,
+    'carriage return': chars,
+    tab: chars,
+    'Unicode line separator': chars,
+  };
+  const cases = {
+    anchor: ['  packages/ui:\n', '  packages/ui: &ui\n'],
+    alias: ['  .:\n    devDependencies:', '  .: *ui\n  x:\n    devDependencies:'],
+    'merge key': ['    hasBin: true\n', '    hasBin: true\n    <<: {a: 1}\n'],
+    tag: ['    hasBin: true\n', '    hasBin: !!bool true\n'],
+    'multi-line flow mapping': [
+      '    resolution: {integrity: sha512-AAAA==}\n',
+      '    resolution: {integrity: sha512-AAAA==,\n      directory: ../evil}\n',
+    ],
+    'multi-line flow sequence': ['    hasBin: true\n', '    os: [linux,\n      darwin]\n'],
+    'multi-line quoted value': [
+      '        specifier: 3.6.2\n',
+      "        specifier: '3.6.2\n  packages/ui:\n    x'\n",
+    ],
+    'backslash escape': ['    hasBin: true\n', '    "t\\x61rball": https://evil.example/x.tgz\n'],
+    'carriage return': ['    hasBin: true\n', '    hasBin: true\r  packages/ui:\n'],
+    tab: ['    hasBin: true\n', '    hasBin:\ttrue\n'],
+    'Unicode line separator': ['    hasBin: true\n', '    hasBin: true\u2028  x: 1\n'],
+    'double-quoted value spoofing parent keys': [
+      '        specifier: 3.6.2\n        version: 3.6.2\n',
+      [
+        `        '"': "''`,
+        '  packages/ui:',
+        '    dependencies:',
+        "      '@pwp/core':",
+        '          x" # "',
+        '        specifier: workspace:*',
+        '        version: link:../core',
+        '',
+      ].join('\n'),
+    ],
+    'double-quoted value': ['        specifier: 3.6.2\n', '        specifier: "3.6.2"\n'],
+    'block scalar': ['    hasBin: true\n', '    note: |\n      text\n'],
+    'block scalar with a comment': [
+      '        specifier: workspace:*\n',
+      '        specifier: |- # c\n          workspace:*\n',
+    ],
+    'block scalar in a sequence with a comment': [
+      '    hasBin: true\n',
+      '    os:\n      - > # c\n        linux\n',
+    ],
+    'nested sequence block scalar': [
+      '    hasBin: true\n',
+      '    os:\n      - - |\n          linux\n',
+    ],
+    'document marker': ["lockfileVersion: '9.0'\n", "---\nlockfileVersion: '9.0'\n"],
+    'explicit key': ['    hasBin: true\n', '    ? hasBin\n    : true\n'],
+  };
+  for (const [name, edit] of Object.entries(cases))
+    lockRejected(lockVerify(edit), name, expect[name] ?? form);
+});
+
+test('verify: a lockfile that is new on main gets the same content checks', () => {
+  rejected(
+    verify(
+      (repo) =>
+        put(
+          repo,
+          'pnpm-lock.yaml',
+          `${LOCK_BASE}\n  x@1.0.0:\n    resolution: {tarball: https://evil.example/x.tgz}\n`,
+        ),
+      { omit: ['pnpm-lock.yaml'] },
+    ),
+    /tarball is not on/,
+  );
+  // With no base lockfile, even a workspace link: is new.
+  rejected(
+    verify((repo) => put(repo, 'pnpm-lock.yaml', LOCK_BASE), { omit: ['pnpm-lock.yaml'] }),
+    /entry that the base lockfile does not have \(under importers > packages\/ui > dependencies > '@pwp\/core'\): version: link:\.\.\/core/,
+  );
 });

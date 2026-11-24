@@ -7,8 +7,9 @@ name: bootstrap-lockfile
 #             Prettier (both load code from node_modules and the repo) and uploads the result
 #             as a binary git patch. Treat its output as untrusted.
 #   push      contents: write + actions: write. Runs no repo or dependency code: only checkout,
-#             download-artifact, git and gh. Applies the patch, rejects it unless every changed
-#             path is on the allow-list below, commits, pushes to main, then dispatches ci and
+#             download-artifact, bash, coreutils, grep, git and gh. Applies the patch, rejects it
+#             unless every changed path is on the allow-list below and the lockfile content
+#             passes the LOCK_* checks, commits, pushes to main, then dispatches ci and
 #             security (pushes made with GITHUB_TOKEN don't trigger workflows; dispatches do).
 # Both jobs only run for refs/heads/main, so dispatching from another branch does nothing.
 on:
@@ -31,8 +32,27 @@ concurrency:
 #     scripts/review-gate.mjs (the test checks each tracked file and one sample per matrix glob,
 #     so a new matrix path that this regex misses fails CI). A formatting change to a protected
 #     file fails the run: format it in a reviewed PR instead (ci runs format:check on PRs).
+#   - a path matching CODE_PATHS (anything that runs or renders as code) is never auto-pushed,
+#     even when it is not protected: the run fails and the formatting goes in a reviewed PR (#177).
+# Content of a patched pnpm-lock.yaml (#177). It is read as text with bash and grep, so it must
+# first be in the plain style pnpm writes, where each line's indentation is its YAML ancestry:
+#   - LOCK_FORM, tabs, CRs, backslashes, double quotes (pnpm writes single quotes), Unicode line
+#     breaks, and {...}, [...] or single quotes that do not close on the same line are refused
+#     (anchors, aliases, tags, merge keys, document markers, which a %directive needs, explicit
+#     keys, block scalars with or without a comment, and multi-line values could otherwise hide
+#     or move entries);
+#   - every "tarball" must be part of a LOCK_TARBALL match (https://registry.npmjs.org/ only);
+#   - every line matching LOCK_SPECIAL (a git, URL, file: or link: resolution or version), keyed
+#     by the keys of its enclosing mappings, must already be in the base lockfile. So existing
+#     workspace link: entries stay, and a new or moved one fails. LOCK_DEPRECATED lines (a plain
+#     deprecation message, which may contain a URL) are exempt from this and the quote check.
 env:
-  FORMAT_PATHS: '\.(md|mdx|json|jsonc|json5|yaml|yml|css|scss|html|astro|js|mjs|cjs|jsx|ts|mts|cts|tsx)$'
+  FORMAT_PATHS: '\.(md|json|jsonc|json5|yaml|yml|css|scss)$'
+  CODE_PATHS: '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|astro|mdx|html|htm|vue|svelte)$'
+  LOCK_TARBALL: '(^|[{ ,])tarball: https://registry\.npmjs\.org/[^ ,}]+'
+  LOCK_SPECIAL: '(^|[^A-Za-z0-9_.-])(link|file|git|github|gitlab|bitbucket|gist|https?|ssh|git\+[a-z]+):|://|(^|[^A-Za-z0-9_.-])git@|(^|[ {,])(repo|commit|directory|path|type):'
+  LOCK_FORM: '(^|[[{ ,])[&*!][^] ,}]|<<|^(---|\.\.\.)( |$)|^\?( |$)|(^|[ :-])[|>][-+0-9]*( +#.*)?$'
+  LOCK_DEPRECATED: '^    deprecated: [^][{}&*!|>''"%@`#?-]'
   PROTECTED_PATHS: '(^|/)\.|^(scripts|tenants|e2e)/|^packages/(cli|functions|adapters|schema)/|^packages/core/src/richtext/|^packages/[^/]+/src/contracts/|(^|/)(package\.(json|yaml|json5)|pnpm-workspace\.yaml|turbo\.json|tsconfig[^/]*\.json|[^/]*\.config\.[^/]*)$|^(AGENTS|PROMPT|SECURITY)\.md$|^docs/(SECURITY|THREAT-MODEL|DECISIONS|DEPENDENCIES)\.md$|^docs/adr/|[Ss]anitiz|[Cc]sp|/headers/|Form'
 jobs:
   generate:
@@ -98,7 +118,8 @@ jobs:
           path: ${{ runner.temp }}/bootstrap-patch
       # Only git and bash from here on. The patch comes from a job that ran dependency code, so
       # git applies it (git refuses paths outside the work tree, inside .git or behind symlinks)
-      # and the RESULT in the index is checked, not what the patch claims.
+      # and the RESULT in the index is checked, not what the patch claims: first the paths, then
+      # the content of pnpm-lock.yaml (#177, see LOCK_* above).
       - id: verify
         env:
           PATCH: ${{ runner.temp }}/bootstrap-patch/bootstrap.patch
@@ -111,11 +132,80 @@ jobs:
           while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
             read -r omode nmode _ _ status <<< "${meta#:}"
             if [ "$path" = pnpm-lock.yaml ] && [ "$nmode" = 100644 ] && { [ "$status" = M ] && [ "$omode" = 100644 ] || [ "$status" = A ]; }; then continue; fi
+            if [[ "$path" =~ $CODE_PATHS ]]; then
+              printf '::error title=bootstrap-lockfile::code file changed (status %s): %q. Code is never auto-pushed: run pnpm format and commit the result in a reviewed PR.\n' "$status" "$path"
+              bad=1
+              continue
+            fi
             if [ "$status" = M ] && [ "$omode" = 100644 ] && [ "$nmode" = 100644 ] && [[ "$path" =~ $FORMAT_PATHS ]] && ! [[ "$path" =~ $PROTECTED_PATHS ]]; then continue; fi
             printf '::error title=bootstrap-lockfile::path outside the allow-list (status %s, mode %s -> %s): %q\n' "$status" "$omode" "$nmode" "$path"
             bad=1
           done < <(git diff --cached --raw -z --no-renames --no-abbrev HEAD)
-          if [ "$bad" != 0 ]; then echo "::error title=bootstrap-lockfile::patch rejected. Fix these files in a reviewed PR, then re-run."; exit 1; fi
+          read -r lmode _ < <(git ls-files -s -- pnpm-lock.yaml) || lmode=
+          if [ "$lmode" = 100644 ] && ! git diff --cached --quiet HEAD -- pnpm-lock.yaml; then
+            export LC_ALL=C
+            work=$(mktemp -d)
+            git show :pnpm-lock.yaml > "$work/new"
+            git show HEAD:pnpm-lock.yaml > "$work/base" 2> /dev/null || : > "$work/base"
+            lockerr() {
+              printf '::error file=pnpm-lock.yaml,line=%s,title=bootstrap-lockfile::%s\n' "$1" "$2"
+              bad=1
+            }
+            # scan FILE OUT CHECK: writes "ancestry<RS>line" to OUT for every git, URL, file: or
+            # link: line (LOCK_SPECIAL), where ancestry is the keys of the enclosing mappings, so
+            # an entry that exists in the base cannot be moved to another importer or package.
+            # With CHECK=1 it also reports every line that breaks the LOCK_* form rules.
+            scan() {
+              local line t s n=0 ind o c IFS=$'\x1f'
+              local -a ki=() kk=()
+              : > "$2"
+              while IFS= read -r line || [ -n "$line" ]; do
+                n=$((n + 1))
+                t="${line#"${line%%[! ]*}"}"
+                ind=$((${#line} - ${#t}))
+                # Blank and comment lines do not end a mapping.
+                case "$t" in
+                  '' | '#'*) ;;
+                  *) while [ "${#ki[@]}" -gt 0 ] && [ "${ki[-1]}" -ge "$ind" ]; do unset 'ki[-1]' 'kk[-1]'; done ;;
+                esac
+                s="$t"
+                while [[ "$s" =~ $LOCK_TARBALL ]]; do s="${s/"${BASH_REMATCH[0]}"/ }"; done
+                if [ "$3" = 1 ]; then
+                  case "$line" in
+                    *$'\t'* | *$'\r'* | *\\* | *$'\xc2\x85'* | *$'\xe2\x80\xa8'* | *$'\xe2\x80\xa9'*)
+                      lockerr "$n" "tab, carriage return, backslash escape or Unicode line break: pnpm does not write these" ;;
+                  esac
+                  if [[ "$t" =~ $LOCK_FORM ]]; then lockerr "$n" "YAML anchor, alias, tag, merge key, document marker, explicit key or block scalar: pnpm does not write these"; fi
+                  o="${t//[^\{]/}" c="${t//[^\}]/}"
+                  if [ "${#o}" != "${#c}" ]; then lockerr "$n" "flow mapping spans lines: pnpm writes each {...} on one line"; fi
+                  o="${t//[!\[]/}" c="${t//[!\]]/}"
+                  if [ "${#o}" != "${#c}" ]; then lockerr "$n" "flow sequence spans lines: pnpm writes each [...] on one line"; fi
+                  if [[ "$s" == *tarball* ]]; then lockerr "$n" "tarball is not on https://registry.npmjs.org/: $t. Commit this lockfile change in a reviewed PR."; fi
+                  if ! [[ "$line" =~ $LOCK_DEPRECATED ]]; then
+                    # With one quote character only, a line that opens an unclosed quoted value
+                    # always has an odd count of it, whatever else it contains.
+                    case "$t" in *'"'*) lockerr "$n" "double quote: pnpm writes single quotes" ;; esac
+                    o="${t//[^\']/}"
+                    if [ $((${#o} % 2)) != 0 ]; then lockerr "$n" "quoted value spans lines: pnpm writes each quoted value on one line"; fi
+                  fi
+                fi
+                if ! [[ "$line" =~ $LOCK_DEPRECATED ]] && [[ "$s" =~ $LOCK_SPECIAL ]]; then printf '%s\x1e%s\n' "${kk[*]}" "$t" >> "$2"; fi
+                case "$t" in
+                  '' | '#'* | -*) ;;
+                  *:) ki+=("$ind") kk+=("${t%:}") ;;
+                  *': '*) ki+=("$ind") kk+=("${t%%: *}") ;;
+                esac
+              done < "$1"
+            }
+            scan "$work/base" "$work/base.special" 0
+            scan "$work/new" "$work/new.special" 1
+            while IFS=$'\x1e' read -r ctx t; do
+              ln=$(grep -nFm1 -- "$t" "$work/new" | cut -d: -f1 || true)
+              lockerr "${ln:-1}" "git, URL, file: or link: entry that the base lockfile does not have (under ${ctx//$'\x1f'/ > }): $t. Commit this lockfile change in a reviewed PR."
+            done < <(grep -Fxv -f "$work/base.special" "$work/new.special" || true)
+            rm -rf -- "$work"
+          fi
+          if [ "$bad" != 0 ]; then echo "::error title=bootstrap-lockfile::patch rejected. Make these changes in a reviewed PR, then re-run."; exit 1; fi
           git diff --cached --stat HEAD
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
