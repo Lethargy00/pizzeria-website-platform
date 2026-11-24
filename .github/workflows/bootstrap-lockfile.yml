@@ -42,15 +42,20 @@ concurrency:
 #     keys, block scalars with or without a comment, and multi-line values could otherwise hide
 #     or move entries);
 #   - every "tarball" must be part of a LOCK_TARBALL match (https://registry.npmjs.org/ only);
-#   - every line matching LOCK_SPECIAL (a git, URL, file: or link: resolution or version), keyed
-#     by the keys of its enclosing mappings, must already be in the base lockfile. So existing
-#     workspace link: entries stay, and a new or moved one fails. LOCK_DEPRECATED lines (a plain
-#     deprecation message, which may contain a URL) are exempt from this and the quote check.
+#   - every line matching LOCK_SPECIAL (a git, URL, file: or link: resolution or version, or a
+#     jsr: specifier or @jsr/ name, which pnpm 10.9+ fetches from npm.jsr.io without writing a
+#     tarball), keyed by the keys of its enclosing mappings, must already be in the base
+#     lockfile. So existing workspace link: entries stay, and a new or moved one fails.
+#     LOCK_DEPRECATED lines (a plain deprecation message, which may contain a URL) are exempt
+#     from this and the quote check;
+#   - the dependency graph (#196, see the comment above the graph code in the push job): every
+#     new or changed registry version must come from a package.json specifier that changed, an
+#     existing name@version keeps its integrity, and a new npm alias must be in a package.json.
 env:
   FORMAT_PATHS: '\.(md|json|jsonc|json5|yaml|yml|css|scss)$'
   CODE_PATHS: '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|astro|mdx|html|htm|vue|svelte)$'
   LOCK_TARBALL: '(^|[{ ,])tarball: https://registry\.npmjs\.org/[^ ,}]+'
-  LOCK_SPECIAL: '(^|[^A-Za-z0-9_.-])(link|file|git|github|gitlab|bitbucket|gist|https?|ssh|git\+[a-z]+):|://|(^|[^A-Za-z0-9_.-])git@|(^|[ {,])(repo|commit|directory|path|type):'
+  LOCK_SPECIAL: '(^|[^A-Za-z0-9_.-])(link|file|git|github|gitlab|bitbucket|gist|https?|ssh|jsr|git\+[a-z]+):|://|(^|[^A-Za-z0-9_.-])@jsr/|(^|[^A-Za-z0-9_.-])git@|(^|[ {,])(repo|commit|directory|path|type):'
   LOCK_FORM: '(^|[[{ ,])[&*!][^] ,}]|<<|^(---|\.\.\.)( |$)|^\?( |$)|(^|[ :-])[|>][-+0-9]*( +#.*)?$'
   LOCK_DEPRECATED: '^    deprecated: [^][{}&*!|>''"%@`#?-]'
   PROTECTED_PATHS: '(^|/)\.|^(scripts|tenants|e2e)/|^packages/(cli|functions|adapters|schema)/|^packages/core/src/richtext/|^packages/[^/]+/src/contracts/|(^|/)(package\.(json|yaml|json5)|pnpm-workspace\.yaml|turbo\.json|tsconfig[^/]*\.json|[^/]*\.config\.[^/]*)$|^(AGENTS|PROMPT|SECURITY)\.md$|^docs/(SECURITY|THREAT-MODEL|DECISIONS|DEPENDENCIES)\.md$|^docs/adr/|[Ss]anitiz|[Cc]sp|/headers/|Form'
@@ -201,8 +206,314 @@ jobs:
             scan "$work/new" "$work/new.special" 1
             while IFS=$'\x1e' read -r ctx t; do
               ln=$(grep -nFm1 -- "$t" "$work/new" | cut -d: -f1 || true)
-              lockerr "${ln:-1}" "git, URL, file: or link: entry that the base lockfile does not have (under ${ctx//$'\x1f'/ > }): $t. Commit this lockfile change in a reviewed PR."
+              lockerr "${ln:-1}" "git, URL, file:, link: or JSR entry that the base lockfile does not have (under ${ctx//$'\x1f'/ > }): $t. Commit this lockfile change in a reviewed PR."
             done < <(grep -Fxv -f "$work/base.special" "$work/new.special" || true)
+            # Dependency graph (#196). The base lockfile matched the package.json files at its
+            # commit, so every change must come from a package.json specifier that changed since:
+            #   - an importer entry whose specifier changed must have that exact entry in the
+            #     importer's package.json at HEAD and pin an exact version (or npm:name@version,
+            #     an alias the package.json asks for); its snapshot is a root. An entry whose
+            #     specifier did not change may only change its peer suffix (the "(...)" part);
+            #   - a new snapshots entry must be reachable from a root through new entries, whose
+            #     dependencies must be plain registry versions (so a new npm alias fails), or be a
+            #     peer variant of a base entry: same name@version, and each dependency is the
+            #     base one, part of a root's subtree, or another peer variant of the same version;
+            #   - a new packages entry must be a reachable name@version with a sha512 integrity;
+            #   - an existing packages entry (so its integrity) may not change at all, and an
+            #     existing snapshots entry only in its "optional: true" line.
+            # The parser reads the plain layout pnpm writes (two-space indents, no comments, one
+            # key per line, no duplicate keys); anything else in the new lockfile fails the run.
+            US=$'\x1f' RS=$'\x1e'
+            EXACT='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+            ALIAS='^(@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*@[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+            KEYCHARS='^[A-Za-z0-9@/._()+~=:#-]+$'
+            IMPORTER='^[A-Za-z0-9_@][A-Za-z0-9_.@/-]*$'
+            TOPKEY='^[A-Za-z]+$'
+            unq() {
+              REPLY=$1
+              if [ "${#REPLY}" -ge 2 ] && [[ "$REPLY" == \'*\' ]]; then REPLY=${REPLY:1:-1} REPLY=${REPLY//"''"/"'"}; fi
+              return 0
+            }
+            # Snapshot key of a dependency NAME: REF (REF is a version, or name@version for an alias).
+            tkey() {
+              case "$2" in [0-9]*) REPLY="$1@$2" ;; *) REPLY=$2 ;; esac
+              return 0
+            }
+            edgelist() {
+              local IFS=$RS
+              set -f
+              EDGES=($1)
+              set +f
+            }
+            # graph FILE P REPORT: reads importers, packages and snapshots into P_spec and P_ver
+            # (importer US section US name -> value), P_pkg and P_snap (key -> block text), P_eref
+            # (key US name -> ref), P_edges (key -> name US ref RS ...) and P_line. REPORT=1
+            # reports every line outside the plain layout.
+            graph() {
+              local -n spec="$2_spec" ver="$2_ver" pkg="$2_pkg" snap="$2_snap" eref="$2_eref" edges="$2_edges" at="$2_line"
+              local line t ind k v dn n=0 top= key= imp= sect= id= deps=0 msg
+              local -A seen=()
+              while IFS= read -r line || [ -n "$line" ]; do
+                n=$((n + 1))
+                t="${line#"${line%%[! ]*}"}"
+                ind=$((${#line} - ${#t}))
+                if [ -z "$t" ]; then continue; fi
+                msg=
+                if ! [[ "$line" =~ $LOCK_DEPRECATED ]]; then
+                  case "$t" in '#'* | *' #'*) msg="comment: pnpm does not write comments" ;; esac
+                  if [ $((ind % 2)) != 0 ]; then msg="odd indentation: pnpm indents by two spaces"; fi
+                fi
+                case "$t" in
+                  *:) k=${t%:} v= ;;
+                  *': '*) k=${t%%: *} v=${t#*: } ;;
+                  *) k= v=$t ;;
+                esac
+                if [ -n "$msg" ]; then
+                  :
+                elif [ "$ind" = 0 ]; then
+                  top=$k key= imp= sect= id= deps=0
+                  if ! [[ "$k" =~ $TOPKEY ]]; then
+                    msg="top-level line that is not a key: pnpm writes none"
+                  elif [ -n "${seen[t$US$k]-}" ]; then
+                    msg="duplicate top-level key $k"
+                  fi
+                  seen[t$US$k]=1
+                elif [ "$top" = importers ]; then
+                  case "$ind" in
+                    2) unq "$k"; imp=$REPLY sect= id= ;;
+                    4) sect=$k id= ;;
+                    6)
+                      unq "$k"
+                      id="$imp$US$sect$US$REPLY"
+                      if [ -n "${seen[i$US$id]-}" ]; then msg="duplicate importer entry $REPLY"; fi
+                      seen[i$US$id]=1 at[i$US$id]=$n
+                      ;;
+                    8)
+                      if [ -n "$id" ] && { [ "$k" = specifier ] || [ "$k" = version ]; }; then
+                        if [ -n "${seen[i$US$id$US$k]-}" ]; then msg="duplicate $k"; fi
+                        seen[i$US$id$US$k]=1
+                        unq "$v"
+                        if [ "$k" = specifier ]; then spec[$id]=$REPLY; else ver[$id]=$REPLY; fi
+                      fi
+                      ;;
+                  esac
+                elif [ "$top" = packages ] || [ "$top" = snapshots ]; then
+                  if [ "$ind" = 2 ]; then
+                    unq "$k"
+                    key=$REPLY deps=0
+                    if [ -z "$k" ] || { [ -n "$v" ] && [ "$v" != '{}' ]; }; then
+                      msg="$top entry that is not 'key:' or 'key: {}'"
+                    elif ! [[ "$key" =~ $KEYCHARS ]]; then
+                      msg="unexpected character in $top key $key"
+                    elif [ -n "${seen[$top$US$key]-}" ]; then
+                      msg="duplicate $top entry $key"
+                    fi
+                    seen[$top$US$key]=1 at[$top$US$key]=$n
+                    # "key: {}" and "key:" with no lines under it are the same empty mapping.
+                    if [ "$top" = packages ]; then pkg[$key]=$US; else snap[$key]=$US; fi
+                  elif [ -z "$key" ] || [ "$ind" -lt 2 ]; then
+                    msg="line outside a $top entry"
+                  elif [ "$top" = packages ]; then
+                    pkg[$key]+="$line$US"
+                  else
+                    snap[$key]+="$line$US"
+                    if [ "$ind" = 4 ]; then
+                      case "$k" in dependencies | optionalDependencies) deps=1 ;; *) deps=0 ;; esac
+                      if [ "$deps" = 1 ] && [ -n "$v" ]; then msg="flow-style $k: pnpm writes one dependency per line"; fi
+                    elif [ "$deps" = 1 ] && [ "$ind" = 6 ]; then
+                      unq "$k"
+                      dn=$REPLY
+                      unq "$v"
+                      if [ -z "$k" ] || [ -z "$v" ] || ! [[ "$dn" =~ $KEYCHARS ]] || ! [[ "$REPLY" =~ $KEYCHARS ]]; then
+                        msg="dependency of $key that is not 'name: version'"
+                      elif [ -n "${eref[$key$US$dn]+x}" ]; then
+                        msg="duplicate dependency $dn of $key"
+                      fi
+                      eref[$key$US$dn]=$REPLY
+                      edges[$key]+="$dn$US$REPLY$RS"
+                    elif [ "$deps" = 1 ]; then
+                      msg="nested value under the dependencies of $key"
+                    fi
+                  fi
+                fi
+                if [ -n "$msg" ] && [ "$3" = 1 ]; then lockerr "$n" "$msg. Commit this lockfile change in a reviewed PR."; fi
+              done < "$1"
+              return 0
+            }
+            # injson SECTION NAME SPEC: succeeds if the package.json on stdin (in the layout
+            # Prettier writes) has "NAME": "SPEC" in its SECTION.
+            injson() {
+              local l in=0 want="    \"$2\": \"$3\""
+              while IFS= read -r l; do
+                if [ "$in" = 0 ]; then
+                  if [ "$l" = "  \"$1\": {" ]; then in=1; fi
+                else
+                  case "$l" in "$want" | "$want,") return 0 ;; '  }' | '  },') in=0 ;; esac
+                fi
+              done
+              return 1
+            }
+            declare -A base_spec=() base_ver=() base_pkg=() base_snap=() base_eref=() base_edges=() base_line=()
+            declare -A new_spec=() new_ver=() new_pkg=() new_snap=() new_eref=() new_edges=() new_line=()
+            graph "$work/base" base 0
+            graph "$work/new" new 1
+            # Roots: importer entries whose specifier changed.
+            roots=() peers=()
+            for id in "${!new_ver[@]}"; do
+              imp=${id%%"$US"*} rest=${id#*"$US"}
+              sect=${rest%%"$US"*} name=${rest#*"$US"}
+              case "$sect" in dependencies | devDependencies | optionalDependencies) ;; *) continue ;; esac
+              s=${new_spec[$id]-} v=${new_ver[$id]} ln=${new_line[i$US$id]}
+              if [ -n "${base_ver[$id]+x}" ] && [ "${base_ver[$id]}" = "$v" ] && [ "${base_spec[$id]-}" = "$s" ]; then continue; fi
+              # Workspace links are checked by the LOCK_SPECIAL rule above.
+              case "$v" in link:*) continue ;; esac
+              if [ -n "${base_ver[$id]+x}" ] && [ "${base_spec[$id]-}" = "$s" ]; then
+                if [ "${base_ver[$id]%%(*}" != "${v%%(*}" ]; then
+                  lockerr "$ln" "$name in importer $imp changed from ${base_ver[$id]} to $v, but its specifier $s did not change. Commit this lockfile change in a reviewed PR."
+                else
+                  tkey "$name" "$v"
+                  peers+=("$REPLY$US$ln")
+                fi
+                continue
+              fi
+              if [ "$imp" = . ]; then
+                pj=package.json
+              elif [[ "$imp" =~ $IMPORTER ]] && [[ "/$imp/" != */../* ]] && [[ "/$imp/" != */./* ]]; then
+                pj="$imp/package.json"
+              else
+                lockerr "$ln" "importer $imp is not a plain relative path"
+                continue
+              fi
+              pjtext=$(git show "HEAD:$pj" 2> /dev/null) || pjtext=
+              if ! injson "$sect" "$name" "$s" <<< "$pjtext"; then
+                lockerr "$ln" "$name: $s in importer $imp is not in the $sect of $pj at HEAD. Commit this lockfile change in a reviewed PR."
+                continue
+              fi
+              if [[ "$s" =~ $EXACT ]]; then
+                want=$s
+              elif [[ "$s" == 'npm:'* ]] && [[ "${s#npm:}" =~ $ALIAS ]]; then
+                want=${s#"npm:"}
+              else
+                lockerr "$ln" "$name: specifier $s in importer $imp is not an exact version or npm:name@version (docs/DEPENDENCIES.md pins exactly). Commit this lockfile change in a reviewed PR."
+                continue
+              fi
+              if [ "$v" != "$want" ] && [[ "$v" != "$want("* ]]; then
+                lockerr "$ln" "$name: version $v in importer $imp does not match its specifier $s. Commit this lockfile change in a reviewed PR."
+                continue
+              fi
+              tkey "$name" "$v"
+              roots+=("$REPLY")
+            done
+            # Everything reachable from the roots. Existing entries are not walked: they may not
+            # change (checked below), so their dependencies are the base ones.
+            declare -A reach=()
+            i=0
+            while [ "$i" -lt "${#roots[@]}" ]; do
+              k=${roots[$i]} i=$((i + 1))
+              if [ -n "${reach[$k]-}" ]; then continue; fi
+              reach[$k]=1
+              if [ -z "${new_snap[$k]+x}" ]; then
+                lockerr 1 "no snapshots entry for $k. Commit this lockfile change in a reviewed PR."
+                continue
+              fi
+              if [ -n "${base_snap[$k]+x}" ]; then continue; fi
+              edgelist "${new_edges[$k]-}"
+              for e in "${EDGES[@]}"; do
+                n=${e%%"$US"*} r=${e#*"$US"}
+                case "$r" in
+                  [0-9]*) roots+=("$n@$r") ;;
+                  *) lockerr "${new_line[snapshots$US$k]}" "new snapshots entry $k depends on $n: $r, an npm alias or not a registry version. An alias must come from a package.json specifier: commit this lockfile change in a reviewed PR." ;;
+                esac
+              done
+            done
+            # Peer variants of base entries: the largest set in which every dependency is allowed.
+            declare -A bvar=() cand=()
+            for k in "${!base_snap[@]}"; do
+              s=${k%%(*}
+              bvar[$s]+="$k$RS"
+            done
+            for k in "${!new_snap[@]}"; do
+              s=${k%%(*}
+              if [ -z "${base_snap[$k]+x}" ] && [ -z "${reach[$k]-}" ] && [ -n "${bvar[$s]-}" ]; then cand[$k]=1; fi
+            done
+            variant() {
+              local k0 e n r r0 t t0 ok s=${1%%(*}
+              edgelist "${bvar[$s]}"
+              local -a k0s=("${EDGES[@]}")
+              edgelist "${new_edges[$1]-}"
+              local -a es=("${EDGES[@]}")
+              for k0 in "${k0s[@]}"; do
+                ok=1
+                for e in "${es[@]}"; do
+                  n=${e%%"$US"*} r=${e#*"$US"}
+                  r0=${base_eref[$k0$US$n]-}
+                  if [ -n "$r0" ] && [ "$r0" = "$r" ]; then continue; fi
+                  tkey "$n" "$r"
+                  t=$REPLY
+                  if [ -n "${reach[$t]-}" ]; then continue; fi
+                  if [ -n "$r0" ] && [ -n "${new_snap[$t]+x}" ]; then
+                    tkey "$n" "$r0"
+                    t0=$REPLY
+                    if [ "${t%%(*}" = "${t0%%(*}" ] && { [ -n "${cand[$t]-}" ] || [ -n "${base_snap[$t]+x}" ]; }; then continue; fi
+                  fi
+                  ok=0
+                  break
+                done
+                if [ "$ok" = 1 ]; then return 0; fi
+              done
+              return 1
+            }
+            more=1
+            while [ "$more" = 1 ]; do
+              more=0
+              for k in "${!cand[@]}"; do
+                if ! variant "$k"; then
+                  unset 'cand[$k]'
+                  more=1
+                fi
+              done
+            done
+            for p in "${peers[@]}"; do
+              t=${p%"$US"*}
+              if [ -z "${new_snap[$t]+x}" ]; then lockerr "${p##*"$US"}" "no snapshots entry for $t. Commit this lockfile change in a reviewed PR."; fi
+            done
+            for k in "${!new_snap[@]}"; do
+              ln=${new_line[snapshots$US$k]}
+              if [ -n "${base_snap[$k]+x}" ]; then
+                o=${base_snap[$k]//"$US    optional: true$US"/$US} c=${new_snap[$k]//"$US    optional: true$US"/$US}
+                if [ "$o" != "$c" ]; then
+                  lockerr "$ln" "snapshots entry $k changed, although its key did not. Commit this lockfile change in a reviewed PR."
+                fi
+              elif [ -z "${reach[$k]-}${cand[$k]-}" ]; then
+                lockerr "$ln" "new snapshots entry $k is not reachable from a dependency whose specifier changed in a package.json. Commit this lockfile change in a reviewed PR."
+              fi
+            done
+            declare -A rpkg=()
+            for k in "${!reach[@]}"; do
+              s=${k%%(*}
+              rpkg[$s]=1
+            done
+            for k in "${!new_pkg[@]}"; do
+              ln=${new_line[packages$US$k]}
+              if [ -n "${base_pkg[$k]+x}" ]; then
+                if [ "${base_pkg[$k]}" != "${new_pkg[$k]}" ]; then
+                  o=${base_pkg[$k]#*"$US    resolution: "} c=${new_pkg[$k]#*"$US    resolution: "}
+                  if [ "${o%%"$US"*}" != "${c%%"$US"*}" ]; then
+                    lockerr "$ln" "integrity or resolution of $k changed, although its name and version did not. Commit this lockfile change in a reviewed PR."
+                  else
+                    lockerr "$ln" "packages entry $k changed, although its name and version did not. Commit this lockfile change in a reviewed PR."
+                  fi
+                fi
+              else
+                if [ -z "${rpkg[$k]-}" ]; then
+                  lockerr "$ln" "new packages entry $k is not reachable from a dependency whose specifier changed in a package.json. Commit this lockfile change in a reviewed PR."
+                fi
+                case "${new_pkg[$k]}" in
+                  *"$US    resolution: {integrity: sha512-"*) ;;
+                  *) lockerr "$ln" "new packages entry $k has no sha512 integrity. Commit this lockfile change in a reviewed PR." ;;
+                esac
+              fi
+            done
             rm -rf -- "$work"
           fi
           if [ "$bad" != 0 ]; then echo "::error title=bootstrap-lockfile::patch rejected. Make these changes in a reviewed PR, then re-run."; exit 1; fi
