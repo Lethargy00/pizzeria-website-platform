@@ -57,3 +57,28 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  path-aliases:
+    # #190: refuse PR paths that macOS or Windows open as another path (case, a trailing dot
+    # or space, NFC/NFD, ignorable code points). The paths come from the trees API for the PR
+    # head, so the PR is still never checked out, and the check is the base commit's copy.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out gate scripts from the PR's base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-gate
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+            .nvmrc
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with: { node-version-file: base-gate/.nvmrc }
+      - name: check-path-aliases (base copy)
+        working-directory: base-gate
+        run: node scripts/check-path-aliases.mjs --tree "$HEAD_SHA"
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
