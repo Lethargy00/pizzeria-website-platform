@@ -47,7 +47,7 @@
 # Other dependency manifests (#160) and alternate ones (#139). Mirrors ALT_MANIFESTS in scripts/review-gate.mjs (#137).
 # CODEOWNERS has no brace expansion, so each extension gets its own line. Placed after the
 # /playground/ and /packages/ entries so that, as the last match, they own these files.
-/playground/package.json            @Lethargy00  # design-system + security review (a dependency path)
+/playground/package.json            @Lethargy00  # platform + security review (a dependency path)
 /packages/*/package.json            @Lethargy00  # platform + security review (dependency fields; PACKAGE_MANIFESTS)
 /package.yaml                       @Lethargy00  # platform + security review (alternate manifest, a dependency path)
 /package.json5                      @Lethargy00  # platform + security review (alternate manifest, a dependency path)
@@ -78,6 +78,20 @@
 /scripts/check-html-sinks.mjs       @Lethargy00  # platform + security review (ADR 0002 (b), (d), #80)
 /scripts/test/richtext-*            @Lethargy00  # platform + security review (fixtures for (a))
 /scripts/test/*html-sink*           @Lethargy00  # platform + security review (fixtures for (b), (d))
+
+# Security-sensitive code paths (#175). Mirrors the security row of MATRIX in scripts/review-gate.mjs,
+# which requires approved:security for each path below. A test pins every glob of that row to a
+# line here whose note says security. The workflow, gate-script, SECURITY.md, THREAT-MODEL.md,
+# CODEOWNERS and functions/adapters lines above already cover their globs.
+/packages/ui/src/components/*Form*/     @Lethargy00  # ui + security review (forms)
+/packages/**/sanitize*/                 @Lethargy00  # backend + security review (sanitizer)
+/packages/**/*sanitiz*                  @Lethargy00  # backend + security review (sanitizer)
+/packages/**/csp/                       @Lethargy00  # backend + security review (CSP)
+/packages/**/*csp*                      @Lethargy00  # backend + security review (CSP)
+/packages/**/headers/                   @Lethargy00  # backend + security review (headers)
+/packages/cli/src/build/                @Lethargy00  # platform + security review (build isolation)
+/packages/cli/src/isolation/            @Lethargy00  # platform + security review (build isolation)
+**/.env.example                         @Lethargy00  # security review (secrets template)
 
 # Install-time code and the license gate (#128): run during install or judge dependencies.
 /.pnpmfile.cjs                      @Lethargy00  # security (install hook, runs on every pnpm install)
