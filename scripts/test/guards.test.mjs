@@ -263,12 +263,12 @@ test('touches-guard parsing', () => {
   assert.equal(closedIssue('fixes #7'), 7);
   assert.equal(closedIssue('relates to #7'), null);
   const md =
-    '## Scope\nIn: x\n## Touches\n`packages/ui/src/components/Hero/**`, `docs/guides/hero.md`\n## Contracts\n`packages/schema/**`\n';
+    '## Scope\nIn: x\n## Touches\n- `packages/ui/src/components/Hero/**`, `docs/guides/hero.md`\n## Contracts\n`packages/schema/**`\n';
   assert.deepEqual(parseTouches(md), ['packages/ui/src/components/Hero/**', 'docs/guides/hero.md']);
   const form =
-    '### Scope\n\nIn\n\n### Touches\n\n`packages/core/**`\n\n### Contracts\n\n_No response_';
+    '### Scope\n\nIn\n\n### Touches\n\n- `packages/core/**`\n\n### Contracts\n\n_No response_';
   assert.deepEqual(parseTouches(form), ['packages/core/**']);
-  assert.deepEqual(parseTouches('## Touches\n`a/**`'), ['a/**']);
+  assert.deepEqual(parseTouches('## Touches\n- `a/**`'), ['a/**']);
   assert.deepEqual(outside(['packages/core/src/a.ts', 'pnpm-lock.yaml'], ['packages/core/**']), [
     'pnpm-lock.yaml',
   ]);
