@@ -67,6 +67,25 @@ Apply when the plan allows it (see `docs/HANDOFF.md`):
 - Every dependency change needs a `type:dependency` issue approved by `architect` and `security`, an exact version and an entry in `docs/DEPENDENCIES.md`.
 - GitHub Actions: pin to full commit SHAs with a version comment (`uses: actions/checkout@<sha> # v4.x.y`). Open finding until done; Dependabot (`github-actions` ecosystem) then keeps SHAs current.
 
+### Install scripts (#176)
+
+No manifest has an install-type lifecycle script today, and adding one is a dependency change. If one is added, `review-gate` also covers what it runs. `installScriptCoverage` in `scripts/review-gate.mjs` reads every `package.json` in the repo at three commits: the merge base, the current tip of the base branch and the PR head. A manifest counts as running install code if it declares one of `INSTALL_SCRIPTS` (`pnpm:devPreinstall`, `preinstall`, `install`, `postinstall`, `preprepare`, `prepare`, `postprepare`, `prepublish`) or has a `binding.gyp` beside it, because pnpm then runs `node-gyp rebuild` itself. For each such manifest, these changes need the dependency row (`approved:architect` and `approved:security`):
+
+- any path under the manifest's directory, because the entry file imports its neighbours. For the root manifest, that means every path;
+- any path under the directory of a path the script names. For example, `node ../../tools/setup.mjs` in `packages/ui` covers `tools/`;
+- any edit to the manifest itself, because pnpm passes every field to the script as `npm_package_*` variables. Only a whitespace-only reformat is exempt.
+
+The coverage fails closed, so every changed path then needs the dependency row, in each of these cases:
+
+- the GitHub API fails or returns a truncated tree;
+- a manifest is a symlink, cannot be parsed, or is a `package.yaml` or `package.json5`;
+- a script is not a string;
+- a script word cannot be resolved. That covers shell variables, quotes, globs, `~`, backslashes, inline code (`-e`, `-p`, `-c`, `--eval`, `--print`), anything that changes the working directory (`cd`, `pushd`, `-C`, `--prefix`, `--dir`, `--cwd`), an absolute path, and a path that leaves the repo.
+
+If a workspace package ever needs an install script, keep it to `node <relative path>`.
+
+Residual risk: the base branch can move between the last gate run and the merge. If an install script lands on `main` in that window, an already-green PR that changes its target is not re-checked. Re-run `review-gate` before merging when `main` has moved.
+
 ## Dependabot PRs
 
 Dependabot PRs pass through `touches-guard` with an exception (#59). Two things matter to maintainers:
