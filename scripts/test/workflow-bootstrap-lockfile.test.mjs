@@ -345,10 +345,12 @@ const rejected = (r, re = /outside the allow-list/) => {
 
 test('verify: accepts lockfile changes and formatting of ordinary files', () => {
   ok(verify((r) => put(r, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\nimporters: {}\n")));
-  ok(
+  // A lockfile that is new on main has no base to compare lockfileVersion with (#217, R7).
+  rejected(
     verify((r) => put(r, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\n"), {
       omit: ['pnpm-lock.yaml'],
     }),
+    /lockfileVersion differs from the base lockfile/,
   );
   ok(
     verify((r) => {
@@ -486,16 +488,23 @@ snapshots:
   prettier@3.6.2: {}
 `;
 // The base lockfile with `edit` applied (a [from, to] pair, or a function of the text), as a
-// lockfile-only patch.
-const lockVerify = (edit, base = LOCK_BASE) => {
+// lockfile-only patch. `files` are other files at HEAD, such as the package.json whose change
+// asked for the new lockfile.
+const lockVerify = (edit, base = LOCK_BASE, files = {}) => {
   const next = typeof edit === 'function' ? edit(base) : base.replace(edit[0], edit[1]);
   assert.notEqual(next, base, 'the fixture edit changes the lockfile');
-  return verify((r) => put(r, 'pnpm-lock.yaml', next), { base: { 'pnpm-lock.yaml': base } });
+  return verify((r) => put(r, 'pnpm-lock.yaml', next), {
+    base: { ...files, 'pnpm-lock.yaml': base },
+  });
 };
+// A root package.json in the layout Prettier writes.
+const pkgJson = (sections) => `${JSON.stringify({ name: 'x', ...sections }, null, 2)}\n`;
 const addPackage = (entry) => (t) => t.replace('\nsnapshots:', `\n${entry}\nsnapshots:`);
 const lockRejected = (r, name, re) => {
   assert.notEqual(r.status, 0, `${name} should be rejected:\n${r.stdout}${r.stderr}`);
   assert.match(r.stdout, re, name);
+  // The peer-variant fixpoint always settles; its round cap is only a safeguard.
+  assert.doesNotMatch(r.stdout, /peer variant check did not settle/, name);
 };
 
 test('verify: accepts a lockfile-only patch with registry packages and existing workspace links', () => {
@@ -506,15 +515,25 @@ test('verify: accepts a lockfile-only patch with registry packages and existing 
     '    hasBin: true',
     '',
     '  left-pad@1.3.0:',
-    '    resolution: {integrity: sha512-CCCC==, tarball: https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz}',
+    '    resolution: {integrity: sha512-CCCC==}',
     '',
   ].join('\n');
+  // #196: rimraf is in package.json at HEAD, and left-pad is its dependency.
+  const pj = pkgJson({ devDependencies: { prettier: '3.6.2', rimraf: '3.0.2' } });
   ok(
-    lockVerify((t) =>
-      addPackage(added)(t).replace(
-        '        version: 3.6.2\n',
-        '        version: 3.6.2\n      rimraf:\n        specifier: 3.0.2\n        version: 3.0.2\n',
-      ),
+    lockVerify(
+      (t) =>
+        addPackage(added)(t)
+          .replace(
+            '        version: 3.6.2\n',
+            '        version: 3.6.2\n      rimraf:\n        specifier: 3.0.2\n        version: 3.0.2\n',
+          )
+          .replace(
+            '  prettier@3.6.2: {}\n',
+            '  left-pad@1.3.0: {}\n\n  prettier@3.6.2: {}\n\n  rimraf@3.0.2:\n    dependencies:\n      left-pad: 1.3.0\n',
+          ),
+      LOCK_BASE,
+      { 'package.json': pj },
     ),
   );
   // Removing an entry, including a link, is fine.
@@ -529,14 +548,22 @@ test('verify: accepts a lockfile-only patch with registry packages and existing 
 test('verify: the real lockfile on main passes the lockfile content checks', () => {
   const real = readFileSync(join(ROOT, 'pnpm-lock.yaml'), 'utf8');
   ok(lockVerify((t) => `${t}\n`, real));
+  // A new direct dependency that the root package.json at HEAD asks for (#196).
   ok(
     lockVerify(
       (t) =>
-        t.replace(
-          /\npackages:\n/,
-          '\npackages:\n\n  zzz-new@1.0.0:\n    resolution: {integrity: sha512-ZZZZ==}\n',
-        ),
+        t
+          .replace(
+            '\n  .:\n    devDependencies:\n',
+            '\n  .:\n    devDependencies:\n      aaa-new:\n        specifier: 1.0.0\n        version: 1.0.0\n',
+          )
+          .replace(
+            /\npackages:\n/,
+            '\npackages:\n\n  aaa-new@1.0.0:\n    resolution: {integrity: sha512-ZZZZ==}\n',
+          )
+          .replace(/\nsnapshots:\n/, '\nsnapshots:\n\n  aaa-new@1.0.0: {}\n'),
       real,
+      { 'package.json': pkgJson({ devDependencies: { 'aaa-new': '1.0.0' } }) },
     ),
   );
 });
@@ -568,7 +595,7 @@ test('verify: rejects a tarball that is not on https://registry.npmjs.org/', () 
 
 test('verify: rejects git, URL, file: and link: entries the base lockfile does not have', () => {
   const re =
-    /file=pnpm-lock\.yaml,line=\d+,.*git, URL, file: or link: entry that the base lockfile does not have/;
+    /file=pnpm-lock\.yaml,line=\d+,.*git, URL, file:, link: or JSR entry that the base lockfile does not have/;
   const cases = {
     'git resolution': addPackage(
       '  x@git+https://github.com/a/x.git#abc:\n    resolution: {commit: abc, repo: https://github.com/a/x.git, type: git}\n',
@@ -621,6 +648,7 @@ test('verify: rejects lockfile YAML that could hide or move an entry from the li
     'carriage return': chars,
     tab: chars,
     'Unicode line separator': chars,
+    'directive without a document marker': /line=1,.*top-level line that is not a key/,
   };
   const cases = {
     anchor: ['  packages/ui:\n', '  packages/ui: &ui\n'],
@@ -669,6 +697,15 @@ test('verify: rejects lockfile YAML that could hide or move an entry from the li
     ],
     'document marker': ["lockfileVersion: '9.0'\n", "---\nlockfileVersion: '9.0'\n"],
     'explicit key': ['    hasBin: true\n', '    ? hasBin\n    : true\n'],
+    // qa-51 (#196): a %directive needs a --- marker, and is not a key on its own.
+    'directive with a document marker': [
+      "lockfileVersion: '9.0'\n",
+      "%YAML 1.2\n---\nlockfileVersion: '9.0'\n",
+    ],
+    'directive without a document marker': [
+      "lockfileVersion: '9.0'\n",
+      "%YAML 1.2\nlockfileVersion: '9.0'\n",
+    ],
   };
   for (const [name, edit] of Object.entries(cases))
     lockRejected(lockVerify(edit), name, expect[name] ?? form);
@@ -692,4 +729,1111 @@ test('verify: a lockfile that is new on main gets the same content checks', () =
     verify((repo) => put(repo, 'pnpm-lock.yaml', LOCK_BASE), { omit: ['pnpm-lock.yaml'] }),
     /entry that the base lockfile does not have \(under importers > packages\/ui > dependencies > '@pwp\/core'\): version: link:\.\.\/core/,
   );
+});
+
+// ---- #196: registry versions, integrity, aliases and JSR ----
+
+const LOCK_GRAPH = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      eslint:
+        specifier: 9.0.0
+        version: 9.0.0
+      plugin:
+        specifier: 2.0.0
+        version: 2.0.0(eslint@9.0.0)
+      prettier:
+        specifier: 3.6.2
+        version: 3.6.2
+
+packages:
+
+  debug@4.0.0:
+    resolution: {integrity: sha512-DDDD==}
+
+  eslint@9.0.0:
+    resolution: {integrity: sha512-EEEE==}
+
+  ms@2.0.0:
+    resolution: {integrity: sha512-MMMM==}
+
+  plugin@2.0.0:
+    resolution: {integrity: sha512-PPPP==}
+    peerDependencies:
+      eslint: '>=9'
+
+  prettier@3.6.2:
+    resolution: {integrity: sha512-AAAA==}
+
+snapshots:
+
+  debug@4.0.0:
+    dependencies:
+      ms: 2.0.0
+
+  eslint@9.0.0:
+    dependencies:
+      debug: 4.0.0
+
+  ms@2.0.0:
+    optional: true
+
+  plugin@2.0.0(eslint@9.0.0):
+    dependencies:
+      debug: 4.0.0
+      eslint: 9.0.0
+
+  prettier@3.6.2: {}
+`;
+const DEV = { eslint: '9.0.0', plugin: '2.0.0', prettier: '3.6.2' };
+// Applies [from, to] pairs (or functions of the text) in order.
+const edits =
+  (...pairs) =>
+  (t) =>
+    pairs.reduce((s, p) => {
+      const next = typeof p === 'function' ? p(s) : s.replace(p[0], p[1]);
+      assert.notEqual(next, s, `fixture edit applies: ${String(p[0] ?? p)}`);
+      return next;
+    }, t);
+const graphVerify = (edit, dev = DEV) =>
+  lockVerify(edit, LOCK_GRAPH, { 'package.json': pkgJson({ devDependencies: dev }) });
+const addSnapshot = (entry) => (t) => `${t}\n${entry}`;
+
+// package.json asks for prettier 3.6.3, which brings a new transitive dependency and an
+// existing one. This is the change the push job exists for.
+const PRETTIER_BUMP = [
+  [
+    '        specifier: 3.6.2\n        version: 3.6.2\n',
+    '        specifier: 3.6.3\n        version: 3.6.3\n',
+  ],
+  [
+    '  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n',
+    '  left-pad@1.3.0:\n    resolution: {integrity: sha512-LLLL==}\n\n  prettier@3.6.3:\n    resolution: {integrity: sha512-BBBB==}\n',
+  ],
+  [
+    '  prettier@3.6.2: {}\n',
+    '  left-pad@1.3.0: {}\n\n  prettier@3.6.3:\n    dependencies:\n      debug: 4.0.0\n      left-pad: 1.3.0\n',
+  ],
+];
+const BUMPED = { ...DEV, prettier: '3.6.3' };
+// package.json asks for eslint 9.1.0: plugin keeps its specifier and gets a new peer variant.
+const ESLINT_BUMP = [
+  [
+    '        specifier: 9.0.0\n        version: 9.0.0\n',
+    '        specifier: 9.1.0\n        version: 9.1.0\n',
+  ],
+  ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.1.0)\n'],
+  [
+    '  eslint@9.0.0:\n    resolution: {integrity: sha512-EEEE==}\n',
+    '  eslint@9.1.0:\n    resolution: {integrity: sha512-FFFF==}\n',
+  ],
+  [
+    '  eslint@9.0.0:\n    dependencies:\n      debug: 4.0.0\n',
+    '  eslint@9.1.0:\n    dependencies:\n      debug: 4.0.0\n',
+  ],
+  [
+    '  plugin@2.0.0(eslint@9.0.0):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.0.0\n',
+    '  plugin@2.0.0(eslint@9.1.0):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.1.0\n',
+  ],
+];
+
+test('verify (#196): accepts a direct bump with its new transitive dependencies', () => {
+  ok(graphVerify(edits(...PRETTIER_BUMP), BUMPED));
+  // A new alias that package.json asks for.
+  ok(
+    graphVerify(
+      edits(
+        [
+          '        specifier: 3.6.2\n        version: 3.6.2\n',
+          '        specifier: npm:fmt@1.0.0\n        version: fmt@1.0.0\n',
+        ],
+        [
+          '  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n',
+          '  fmt@1.0.0:\n    resolution: {integrity: sha512-GGGG==}\n',
+        ],
+        ['  prettier@3.6.2: {}\n', '  fmt@1.0.0: {}\n'],
+      ),
+      { ...DEV, prettier: 'npm:fmt@1.0.0' },
+    ),
+  );
+  // optional: true may come and go on an existing snapshots entry.
+  ok(
+    graphVerify(
+      edits(...PRETTIER_BUMP, ['  ms@2.0.0:\n    optional: true\n', '  ms@2.0.0: {}\n']),
+      BUMPED,
+    ),
+  );
+});
+
+test('verify (#196): rejects a registry version that no package.json change asked for', () => {
+  const unreachable =
+    /new (snapshots|packages) entry \S+ is not reachable from a dependency whose specifier changed/;
+  const variant =
+    /new snapshots entry \S+ is a new peer variant of \S+, which the base lockfile already has/;
+  const changed = /snapshots entry \S+ changed, although its key did not/;
+  const msBump = [
+    ['      ms: 2.0.0\n', '      ms: 2.1.0\n'],
+    addPackage('  ms@2.1.0:\n    resolution: {integrity: sha512-NNNN==}\n'),
+    addSnapshot('  ms@2.1.0: {}\n'),
+  ];
+  // [edits, expected error, devDependencies in package.json at HEAD]
+  const cases = {
+    'unrelated transitive bump next to a direct bump': [[...PRETTIER_BUMP, ...msBump], changed],
+    'unrelated transitive bump on its own': [msBump, changed, DEV],
+    'new entry that nothing depends on': [
+      [
+        ...PRETTIER_BUMP,
+        addPackage('  evil@1.0.0:\n    resolution: {integrity: sha512-XXXX==}\n'),
+        addSnapshot('  evil@1.0.0: {}\n'),
+      ],
+      unreachable,
+    ],
+    'new dependency added to an existing entry': [
+      [...PRETTIER_BUMP, ['      ms: 2.0.0\n', '      left-pad: 1.3.0\n      ms: 2.0.0\n']],
+      changed,
+    ],
+    'direct version change without a specifier change': [
+      [
+        [
+          '        specifier: 9.0.0\n        version: 9.0.0\n',
+          '        specifier: 9.0.0\n        version: 9.0.1\n',
+        ],
+        addPackage('  eslint@9.0.1:\n    resolution: {integrity: sha512-XXXX==}\n'),
+        addSnapshot('  eslint@9.0.1:\n    dependencies:\n      debug: 4.0.0\n'),
+      ],
+      /eslint in importer \. changed from 9\.0\.0 to 9\.0\.1, but its specifier 9\.0\.0 did not change/,
+      DEV,
+    ],
+    'specifier that package.json does not have': [
+      PRETTIER_BUMP,
+      /prettier: 3\.6\.3 in importer \. is not in the devDependencies of package\.json at HEAD/,
+      DEV,
+    ],
+    'specifier in another package.json section': [
+      PRETTIER_BUMP,
+      /prettier: 3\.6\.3 in importer \. is not in the devDependencies of package\.json at HEAD/,
+      'in dependencies',
+    ],
+    'range specifier': [
+      [
+        [
+          '        specifier: 3.6.2\n        version: 3.6.2\n',
+          "        specifier: '^3.6.2'\n        version: 3.6.3\n",
+        ],
+        ...PRETTIER_BUMP.slice(1),
+      ],
+      /specifier \^3\.6\.2 in importer \. is not an exact version/,
+      { ...DEV, prettier: '^3.6.2' },
+    ],
+    'version that does not match the specifier': [
+      [
+        [
+          '        specifier: 3.6.2\n        version: 3.6.2\n',
+          '        specifier: 3.6.3\n        version: 3.6.4\n',
+        ],
+        ...PRETTIER_BUMP.slice(1).map(([a, b]) => [
+          a,
+          b.replaceAll('prettier@3.6.3', 'prettier@3.6.4'),
+        ]),
+      ],
+      /prettier: version 3\.6\.4 in importer \. does not match its specifier 3\.6\.3/,
+    ],
+    // A forged peer suffix makes a new variant of plugin that depends on an unrelated package.
+    'peer variant with a new dependency': [
+      [
+        [
+          '        version: 2.0.0(eslint@9.0.0)\n',
+          '        version: 2.0.0(eslint@9.0.0)(evil@1.0.0)\n',
+        ],
+        addPackage('  evil@1.0.0:\n    resolution: {integrity: sha512-XXXX==}\n'),
+        addSnapshot(
+          '  evil@1.0.0: {}\n\n  plugin@2.0.0(eslint@9.0.0)(evil@1.0.0):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.0.0\n      evil: 1.0.0\n',
+        ),
+      ],
+      variant,
+      DEV,
+    ],
+    // A peer variant may not add a dependency on another existing package either.
+    'peer variant with an existing package as a new dependency': [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(x@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)(x@1):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.0.0\n      ms: 2.0.0\n',
+        ),
+      ],
+      variant,
+      DEV,
+    ],
+    // ... nor move a dependency to another version that the base lockfile already has.
+    'peer variant with another existing version of a dependency': [
+      [
+        addPackage('  debug@3.0.0:\n    resolution: {integrity: sha512-CCCC==}\n'),
+        addSnapshot('  debug@3.0.0: {}\n'),
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(x@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)(x@1):\n    dependencies:\n      debug: 3.0.0\n      eslint: 9.0.0\n',
+        ),
+      ],
+      variant,
+      DEV,
+      2,
+    ],
+    // qa-58 (#217), repro 1: a forged peer suffix on a package whose specifier did not change
+    // re-points a dependency that is not a peer (eslint -> debug) at a version from the bump.
+    'forged peer suffix re-pointing a non-peer dependency': [
+      [
+        ...PRETTIER_BUMP,
+        [
+          '      debug: 4.0.0\n      left-pad: 1.3.0\n',
+          '      debug: 4.1.0\n      left-pad: 1.3.0\n',
+        ],
+        addPackage('  debug@4.1.0:\n    resolution: {integrity: sha512-GGGG==}\n'),
+        addSnapshot('  debug@4.1.0:\n    dependencies:\n      ms: 2.0.0\n'),
+        [
+          '        specifier: 9.0.0\n        version: 9.0.0\n',
+          '        specifier: 9.0.0\n        version: 9.0.0(z@1)\n',
+        ],
+        addSnapshot('  eslint@9.0.0(z@1):\n    dependencies:\n      debug: 4.1.0\n'),
+      ],
+      /new snapshots entry eslint@9\.0\.0\(z@1\) is a new peer variant/,
+    ],
+    // Only names under peerDependencies are peers, not those under peerDependenciesMeta.
+    'forged peer suffix re-pointing a name from peerDependenciesMeta': [
+      [
+        [
+          "      eslint: '>=9'\n",
+          "      eslint: '>=9'\n    peerDependenciesMeta:\n      debug:\n        optional: true\n",
+        ],
+        ...PRETTIER_BUMP,
+        [
+          '      debug: 4.0.0\n      left-pad: 1.3.0\n',
+          '      debug: 4.1.0\n      left-pad: 1.3.0\n',
+        ],
+        addPackage('  debug@4.1.0:\n    resolution: {integrity: sha512-GGGG==}\n'),
+        addSnapshot('  debug@4.1.0:\n    dependencies:\n      ms: 2.0.0\n'),
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(z@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)(z@1):\n    dependencies:\n      debug: 4.1.0\n      eslint: 9.0.0\n',
+        ),
+      ],
+      /new snapshots entry plugin@2\.0\.0\(eslint@9\.0\.0\)\(z@1\) is a new peer variant/,
+      BUMPED,
+      1,
+    ],
+    // A declared peer may only point at an entry that exists and is allowed.
+    'peer variant pointing a peer at a missing entry': [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.9.9)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.9.9):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.9.9\n',
+        ),
+      ],
+      /new snapshots entry plugin@2\.0\.0\(eslint@9\.9\.9\) is a new peer variant/,
+      DEV,
+    ],
+    // qa-58 (#217), repro 2: the same trick adds a dependency name from the bumped subtree.
+    'forged peer suffix adding a dependency from the bump': [
+      [
+        ...PRETTIER_BUMP,
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(z@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)(z@1):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.0.0\n      left-pad: 1.3.0\n',
+        ),
+      ],
+      /new snapshots entry plugin@2\.0\.0\(eslint@9\.0\.0\)\(z@1\) is a new peer variant/,
+    ],
+    // qa-58 (#217): a peer-only importer change whose new variant has no snapshots entry.
+    'no snapshots entry for a peer-only importer change': [
+      [
+        ...ESLINT_BUMP.slice(0, 4),
+        [
+          '  plugin@2.0.0(eslint@9.0.0):\n    dependencies:\n      debug: 4.0.0\n      eslint: 9.0.0\n',
+          '',
+        ],
+      ],
+      /no snapshots entry for plugin@2\.0\.0\(eslint@9\.1\.0\)/,
+      { ...DEV, eslint: '9.1.0' },
+    ],
+    'importer path that is not plain': [
+      [
+        (t) =>
+          t.replace(
+            '\npackages:\n',
+            "\n  './':\n    devDependencies:\n      prettier:\n        specifier: 3.6.3\n        version: 3.6.3\n\npackages:\n",
+          ),
+        ...PRETTIER_BUMP.slice(1),
+        ['        specifier: 3.6.2\n        version: 3.6.2\n', ''],
+      ],
+      /importer \.\/ is not a plain relative path/,
+    ],
+    // ALIAS is anchored: only the tail of npm:../x@1.0.0 looks like name@version.
+    'malformed npm: specifier': [
+      [
+        [
+          '        specifier: 3.6.2\n        version: 3.6.2\n',
+          '        specifier: npm:../x@1.0.0\n        version: ../x@1.0.0\n',
+        ],
+        [
+          '  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n',
+          '  ../x@1.0.0:\n    resolution: {integrity: sha512-XXXX==}\n',
+        ],
+        ['  prettier@3.6.2: {}\n', '  ../x@1.0.0: {}\n'],
+      ],
+      /version \.\.\/x@1\.0\.0 in importer \. is not a registry version or npm alias/,
+      { ...DEV, prettier: 'npm:../x@1.0.0' },
+    ],
+    'new packages entry without a snapshots entry': [
+      [...PRETTIER_BUMP, addPackage('  evil@1.0.0:\n    resolution: {integrity: sha512-XXXX==}\n')],
+      /new packages entry evil@1\.0\.0 is not reachable/,
+    ],
+    // #217 (security-40, R5 fallback): the legitimate eslint bump re-keys plugin, an existing
+    // package, so it goes in a reviewed PR.
+    'peer variant from a legitimate peer bump': [ESLINT_BUMP, variant, { ...DEV, eslint: '9.1.0' }],
+    'no snapshots entry for a changed dependency': [
+      [PRETTIER_BUMP[0], PRETTIER_BUMP[1], ['  prettier@3.6.2: {}\n', '']],
+      /no snapshots entry for prettier@3\.6\.3/,
+    ],
+  };
+  // The first `inBase` edits go into the base lockfile instead of the patch.
+  for (const [name, [pairs, re, dev = BUMPED, inBase = 0]] of Object.entries(cases)) {
+    const pj =
+      dev === 'in dependencies'
+        ? pkgJson({ dependencies: { prettier: '3.6.3' }, devDependencies: DEV })
+        : pkgJson({ devDependencies: dev });
+    const base = edits(...pairs.slice(0, inBase))(LOCK_GRAPH);
+    const patch = pairs.slice(inBase);
+    lockRejected(lockVerify(edits(...patch), base, { 'package.json': pj }), name, re);
+  }
+});
+
+test('verify (#196): the integrity of an unchanged name@version may never change', () => {
+  const re = /integrity or resolution of ms@2\.0\.0 changed, although its name and version did not/;
+  const swap = ['{integrity: sha512-MMMM==}', '{integrity: sha512-EVIL==}'];
+  lockRejected(graphVerify(edits(swap)), 'integrity swap', re);
+  lockRejected(graphVerify(edits(...PRETTIER_BUMP, swap), BUMPED), 'swap next to a bump', re);
+  lockRejected(
+    graphVerify(
+      edits([
+        '{integrity: sha512-MMMM==}',
+        '{integrity: sha512-MMMM==, tarball: https://registry.npmjs.org/evil/-/evil-1.0.0.tgz}',
+      ]),
+    ),
+    'tarball added to an existing entry',
+    re,
+  );
+  lockRejected(
+    graphVerify(
+      edits([
+        '  ms@2.0.0:\n    resolution: {integrity: sha512-MMMM==}\n',
+        '  ms@2.0.0:\n    resolution: {integrity: sha512-MMMM==}\n    hasBin: true\n',
+      ]),
+    ),
+    'another field of an existing entry',
+    /packages entry ms@2\.0\.0 changed, although its name and version did not/,
+  );
+  lockRejected(
+    graphVerify(
+      edits(...PRETTIER_BUMP, [
+        '  left-pad@1.3.0:\n    resolution: {integrity: sha512-LLLL==}\n',
+        '  left-pad@1.3.0:\n    resolution: {tarball: https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz}\n',
+      ]),
+      BUMPED,
+    ),
+    'new entry without an integrity',
+    /new packages entry left-pad@1\.3\.0: its resolution must be exactly \{integrity: sha512-\.\.\.\}, with no tarball/,
+  );
+});
+
+test('verify (#196): rejects npm aliases that no package.json specifier asks for', () => {
+  const cases = {
+    'alias as a dependency of a bumped package': [
+      [
+        PRETTIER_BUMP[0],
+        [
+          '  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n',
+          '  evil@1.3.0:\n    resolution: {integrity: sha512-XXXX==}\n\n  prettier@3.6.3:\n    resolution: {integrity: sha512-BBBB==}\n',
+        ],
+        [
+          '  prettier@3.6.2: {}\n',
+          '  evil@1.3.0: {}\n\n  prettier@3.6.3:\n    dependencies:\n      left-pad: evil@1.3.0\n',
+        ],
+      ],
+      /new snapshots entry prettier@3\.6\.3 depends on left-pad: evil@1\.3\.0, an npm alias/,
+    ],
+    'alias in importers that package.json does not have': [
+      [
+        [
+          '        specifier: 3.6.2\n        version: 3.6.2\n',
+          '        specifier: npm:evil@3.6.3\n        version: evil@3.6.3\n',
+        ],
+        [
+          '  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n',
+          '  evil@3.6.3:\n    resolution: {integrity: sha512-XXXX==}\n',
+        ],
+        ['  prettier@3.6.2: {}\n', '  evil@3.6.3: {}\n'],
+      ],
+      /prettier: npm:evil@3\.6\.3 in importer \. is not in the devDependencies/,
+    ],
+    'exact specifier resolved to an alias': [
+      [
+        [
+          '        specifier: 3.6.2\n        version: 3.6.2\n',
+          '        specifier: 3.6.3\n        version: evil@3.6.3\n',
+        ],
+        [
+          '  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n',
+          '  evil@3.6.3:\n    resolution: {integrity: sha512-XXXX==}\n',
+        ],
+        ['  prettier@3.6.2: {}\n', '  evil@3.6.3: {}\n'],
+      ],
+      /prettier: version evil@3\.6\.3 in importer \. does not match its specifier 3\.6\.3/,
+    ],
+  };
+  for (const [name, [pairs, re]] of Object.entries(cases))
+    lockRejected(graphVerify(edits(...pairs), BUMPED), name, re);
+});
+
+test('verify (#196): rejects @jsr/ packages and jsr: specifiers the base lockfile does not have', () => {
+  const re = /git, URL, file:, link: or JSR entry that the base lockfile does not have/;
+  // pnpm 10.9+ fetches the @jsr/ scope from npm.jsr.io and writes no tarball for it.
+  lockRejected(
+    graphVerify(
+      edits(
+        ...PRETTIER_BUMP.slice(0, 2),
+        [
+          '  prettier@3.6.2: {}\n',
+          "  '@jsr/std__path@1.0.0': {}\n\n  left-pad@1.3.0: {}\n\n  prettier@3.6.3:\n    dependencies:\n      '@jsr/std__path': 1.0.0\n      left-pad: 1.3.0\n",
+        ],
+        addPackage("  '@jsr/std__path@1.0.0':\n    resolution: {integrity: sha512-JJJJ==}\n"),
+      ),
+      BUMPED,
+    ),
+    '@jsr/ package',
+    re,
+  );
+  lockRejected(
+    graphVerify(edits(['        specifier: 3.6.2\n', '        specifier: jsr:@std/fmt@3.6.2\n']), {
+      ...DEV,
+      prettier: 'jsr:@std/fmt@3.6.2',
+    }),
+    'jsr: specifier',
+    re,
+  );
+});
+
+test('verify (#196): rejects lockfile layouts that the graph parser does not read', () => {
+  const marker = join(mkdtempSync(join(tmpdir(), 'pwp-marker-')), 'pwned');
+  const cases = {
+    'duplicate snapshots entry': [
+      addSnapshot('  ms@2.0.0:\n    dependencies:\n      evil: 1.0.0\n'),
+      /duplicate snapshots entry ms@2\.0\.0/,
+    ],
+    'duplicate packages section': [
+      (t) => `${t}\npackages:\n\n  evil@1.0.0:\n    resolution: {integrity: sha512-XXXX==}\n`,
+      /duplicate top-level key packages/,
+    ],
+    'duplicate importer entry': [
+      [
+        '      prettier:\n',
+        '      prettier:\n        specifier: 3.6.2\n        version: 3.6.2\n      prettier:\n',
+      ],
+      /duplicate importer entry prettier/,
+    ],
+    'duplicate version line': [
+      ['        version: 3.6.2\n', '        version: 3.6.2\n        version: 3.6.3\n'],
+      /duplicate version/,
+    ],
+    'duplicate dependency': [
+      ['      ms: 2.0.0\n', '      ms: 2.0.0\n      ms: 2.1.0\n'],
+      /duplicate dependency ms of debug@4\.0\.0/,
+    ],
+    'flow-style dependencies': [
+      ['  prettier@3.6.2: {}\n', '  prettier@3.6.2:\n    dependencies: {evil: 1.0.0}\n'],
+      /flow-style dependencies/,
+    ],
+    'flow-style entry': [
+      ['  prettier@3.6.2: {}\n', '  prettier@3.6.2: {dependencies: {evil: 1.0.0}}\n'],
+      /entry that is not 'key:' or 'key: \{\}'/,
+    ],
+    'line outside an entry': [
+      ['\npackages:\n', '\npackages:\n    stray: 1\n'],
+      /line outside a packages entry/,
+    ],
+    'dependency that is not name: version': [
+      ['      ms: 2.0.0\n', '      - ms\n'],
+      /dependency of debug@4\.0\.0 that is not 'name: version'/,
+    ],
+    'nested value under dependencies': [
+      ['      ms: 2.0.0\n', '      ms: 2.0.0\n        x: 1\n'],
+      /nested value under the dependencies of debug@4\.0\.0/,
+    ],
+    comment: [
+      ['      ms: 2.0.0\n', '      ms: 2.0.0 # 2.1.0\n'],
+      /comment: pnpm does not write comments/,
+    ],
+    'odd indentation': [['      ms: 2.0.0\n', '       ms: 2.0.0\n'], /odd indentation/],
+    'shell syntax in a key': [
+      addSnapshot(`  x@1.0.0$(touch\${IFS}${marker}):\n    dependencies:\n      ms: 2.0.0\n`),
+      /snapshots key \S+ is not name@version followed by balanced/,
+    ],
+  };
+  try {
+    for (const [name, [edit, re]] of Object.entries(cases))
+      lockRejected(graphVerify(edits(edit)), name, re);
+    assert.equal(spawnSync('test', ['-e', marker]).status, 1, 'no key ran as shell code');
+  } finally {
+    rmSync(dirname(marker), { recursive: true, force: true });
+  }
+});
+
+// ---- #217 (security-40, R1-R8): the lockfile as pnpm reads it ----
+
+// security-40's base (pbase.lock): plugin declares eslint as a peer.
+const LOCK_PBASE = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      eslint:
+        specifier: 9.0.0
+        version: 9.0.0
+      plugin:
+        specifier: 2.0.0
+        version: 2.0.0(eslint@9.0.0)
+      prettier:
+        specifier: 3.6.2
+        version: 3.6.2
+
+packages:
+
+  eslint@9.0.0:
+    resolution: {integrity: sha512-EEEE==}
+
+  ms@2.0.0:
+    resolution: {integrity: sha512-MMMM==}
+
+  plugin@2.0.0:
+    resolution: {integrity: sha512-PPPP==}
+    peerDependencies:
+      eslint: '>=8'
+
+  prettier@3.6.2:
+    resolution: {integrity: sha512-AAAA==}
+
+snapshots:
+
+  eslint@9.0.0:
+    dependencies:
+      ms: 2.0.0
+
+  ms@2.0.0: {}
+
+  plugin@2.0.0(eslint@9.0.0):
+    dependencies:
+      eslint: 9.0.0
+
+  prettier@3.6.2: {}
+`;
+const PDEV = { eslint: '9.0.0', plugin: '2.0.0', prettier: '3.6.2' };
+const PBUMPED = { ...PDEV, prettier: '3.6.3' };
+// pkgb.json: package.json asks for prettier 3.6.3. The edits make prettier 3.6.3 a root whose
+// snapshot gets the dependency lines `deps` (security-40's fixtures put their payload there).
+const pBump = (deps = '', extraPkgs = '') => [
+  [
+    '        specifier: 3.6.2\n        version: 3.6.2\n',
+    '        specifier: 3.6.3\n        version: 3.6.3\n',
+  ],
+  [
+    '  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n',
+    `${extraPkgs}  prettier@3.6.3:\n    resolution: {integrity: sha512-BBBB==}\n`,
+  ],
+  [
+    '  prettier@3.6.2: {}\n',
+    deps ? `  prettier@3.6.3:\n    dependencies:\n${deps}` : '  prettier@3.6.3: {}\n',
+  ],
+];
+const pVerify = (pairs, dev = PDEV) =>
+  lockVerify(edits(...pairs), LOCK_PBASE, { 'package.json': pkgJson({ devDependencies: dev }) });
+const PLUGIN_SNAP = '  plugin@2.0.0(eslint@9.0.0):\n    dependencies:\n      eslint: 9.0.0\n';
+const variantRe = /is a new peer variant of \S+, which the base lockfile already has/;
+const grammarRe = /snapshots key \S+ is not name@version followed by balanced \(\.\.\.\) groups/;
+
+test('verify (#217): the legitimate bumps and the real lockfile still pass on pbase', () => {
+  ok(pVerify(pBump(), PBUMPED));
+  // A dependency whose name starts with a digit is a version ref, not an alias (R1).
+  ok(
+    pVerify(
+      [
+        ...pBump(
+          '      7zip-bin: 5.2.0\n',
+          '  7zip-bin@5.2.0:\n    resolution: {integrity: sha512-DDDD==}\n\n',
+        ),
+        addSnapshot('  7zip-bin@5.2.0: {}\n'),
+      ],
+      PBUMPED,
+    ),
+  );
+});
+
+test('verify (#217): R1 keys and refs follow pnpm removeSuffix and refToRelative', () => {
+  const cases = {
+    // A3: text after the last ")" makes another package id for pnpm, with its own resolution.
+    A3: [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)x\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)x:\n    resolution: {integrity: sha512-VVVV==, tarball: https://registry.npmjs.org/evil/-/evil-1.0.0.tgz}\n    dependencies:\n      eslint: 9.0.0\n',
+        ),
+      ],
+      grammarRe,
+    ],
+    A3b: [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)x(y@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)x(y@1):\n    resolution: {integrity: sha512-VVVV==, tarball: https://registry.npmjs.org/evil/-/evil-1.0.0.tgz}\n    dependencies:\n      eslint: 9.0.0\n',
+        ),
+      ],
+      grammarRe,
+    ],
+    // A8: pnpm reads 7zip-bin@5.2.0 as an alias (an "@" before any "("), whatever its first character.
+    A8: [
+      [
+        ...pBump(
+          '      7zip-bin: 5.2.0\n      ms: 7zip-bin@5.2.0\n',
+          '  7zip-bin@5.2.0:\n    resolution: {integrity: sha512-DDDD==}\n\n',
+        ),
+        addSnapshot('  7zip-bin@5.2.0: {}\n\n  ms@7zip-bin@5.2.0: {}\n'),
+      ],
+      /new snapshots entry prettier@3\.6\.3 depends on ms: 7zip-bin@5\.2\.0, an npm alias/,
+      PBUMPED,
+    ],
+    'A8 alias key': [
+      [
+        ...pBump(
+          '      7zip-bin: 5.2.0\n      ms: 7zip-bin@5.2.0\n',
+          '  7zip-bin@5.2.0:\n    resolution: {integrity: sha512-DDDD==}\n\n',
+        ),
+        addSnapshot('  7zip-bin@5.2.0: {}\n\n  ms@7zip-bin@5.2.0: {}\n'),
+      ],
+      /snapshots key ms@7zip-bin@5\.2\.0 is not name@version/,
+      PBUMPED,
+    ],
+    A8b: [
+      [
+        ...pBump(
+          '      7zip-bin: 5.2.0\n      eslint: 7zip-bin@5.2.0\n',
+          '  7zip-bin@5.2.0:\n    resolution: {integrity: sha512-DDDD==}\n\n',
+        ),
+        [
+          '        version: 2.0.0(eslint@9.0.0)\n',
+          '        version: 2.0.0(eslint@7zip-bin@5.2.0)\n',
+        ],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@7zip-bin@5.2.0):\n    dependencies:\n      eslint: 7zip-bin@5.2.0\n\n  7zip-bin@5.2.0: {}\n',
+        ),
+      ],
+      variantRe,
+      PBUMPED,
+    ],
+    'unbalanced (': [
+      [addSnapshot('  plugin@2.0.0((eslint@9.0.0):\n    dependencies:\n      eslint: 9.0.0\n')],
+      grammarRe,
+    ],
+    'patch_hash suffix': [
+      [addSnapshot('  ms@2.0.0(patch_hash=abc): {}\n')],
+      /snapshots key ms@2\.0\.0\(patch_hash=abc\) is not name@version/,
+    ],
+    'packages key with a suffix': [
+      [addPackage('  ms@2.0.0(x@1):\n    resolution: {integrity: sha512-MMMM==}\n')],
+      /packages key ms@2\.0\.0\(x@1\) is not name@version/,
+    ],
+    'version that is not a registry version': [
+      [['        version: 9.0.0\n', '        version: x9.0.0\n']],
+      /eslint: version x9\.0\.0 in importer \. is not a registry version or npm alias/,
+    ],
+  };
+  for (const [name, [pairs, re, dev]] of Object.entries(cases))
+    lockRejected(pVerify(pairs, dev), name, re);
+});
+
+test('verify (#217): R2 snapshots and packages entries only have the fields pnpm writes', () => {
+  const cases = {
+    // A4 shape, with the packages entry kept: pnpm would use the snapshot's own resolution.
+    'snapshot with resolution': [
+      [
+        [
+          PLUGIN_SNAP,
+          '  plugin@2.0.0(eslint@9.0.0):\n    resolution: {integrity: sha512-VVVV==, tarball: https://registry.npmjs.org/evil/-/evil-1.0.0.tgz}\n    dependencies:\n      eslint: 9.0.0\n',
+        ],
+      ],
+      /snapshots field resolution of plugin@2\.0\.0\(eslint@9\.0\.0\)/,
+    ],
+    // A5: pnpm builds the tarball URL from this version.
+    A5: [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(z@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)(z@1):\n    version: 1.0.0\n    dependencies:\n      eslint: 9.0.0\n',
+        ),
+      ],
+      /snapshots field version of plugin@2\.0\.0\(eslint@9\.0\.0\)\(z@1\)/,
+    ],
+    'snapshot with name': [
+      [['  ms@2.0.0: {}\n', '  ms@2.0.0:\n    name: evil\n']],
+      /snapshots field name of ms@2\.0\.0/,
+    ],
+    'packages entry with version': [
+      [
+        [
+          '    resolution: {integrity: sha512-MMMM==}\n',
+          '    resolution: {integrity: sha512-MMMM==}\n    version: 1.0.0\n',
+        ],
+      ],
+      /packages field version of ms@2\.0\.0/,
+    ],
+    'tarball on a new packages entry of a legitimate bump': [
+      [
+        ...pBump(
+          '      left-pad: 1.3.0\n',
+          '  left-pad@1.3.0:\n    resolution: {integrity: sha512-LLLL==, tarball: https://registry.npmjs.org/evil/-/evil-1.0.0.tgz}\n\n',
+        ),
+        addSnapshot('  left-pad@1.3.0: {}\n'),
+      ],
+      /new packages entry left-pad@1\.3\.0: its resolution must be exactly \{integrity: sha512-\.\.\.\}, with no tarball/,
+      PBUMPED,
+    ],
+  };
+  for (const [name, [pairs, re, dev]] of Object.entries(cases))
+    lockRejected(pVerify(pairs, dev), name, re);
+});
+
+test('verify (#217): R3 every snapshots key has a packages entry and every target exists', () => {
+  // A4: the packages entry is gone, so pnpm would use the snapshot's own resolution.
+  lockRejected(
+    pVerify([
+      ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(z@1)\n'],
+      [
+        "  plugin@2.0.0:\n    resolution: {integrity: sha512-PPPP==}\n    peerDependencies:\n      eslint: '>=8'\n\n",
+        '',
+      ],
+      [
+        PLUGIN_SNAP,
+        '  plugin@2.0.0(eslint@9.0.0)(z@1):\n    resolution: {integrity: sha512-VVVV==, tarball: https://registry.npmjs.org/evil/-/evil-1.0.0.tgz}\n    dependencies:\n      eslint: 9.0.0\n',
+      ],
+    ]),
+    'A4',
+    /snapshots entry plugin@2\.0\.0\(eslint@9\.0\.0\)\(z@1\) has no packages entry plugin@2\.0\.0/,
+  );
+  lockRejected(
+    pVerify(pBump('      left-pad: 1.3.0\n'), PBUMPED),
+    'dangling dependency',
+    /prettier@3\.6\.3 depends on left-pad: 1\.3\.0, which has no snapshots entry/,
+  );
+});
+
+test('verify (#217): R4 and R5 a new peer variant of an existing name@version fails', () => {
+  const cases = {
+    // A1: reachable from the bump, but eslint@9.0.0 is an existing package.
+    A1: [
+      [
+        ...pBump(
+          '      eslint: 9.0.0(z@1)\n',
+          '  evil@1.0.0:\n    resolution: {integrity: sha512-VVVV==}\n\n',
+        ),
+        ['        version: 9.0.0\n', '        version: 9.0.0(z@1)\n'],
+        addSnapshot(
+          '  eslint@9.0.0(z@1):\n    dependencies:\n      evil: 1.0.0\n      ms: 2.0.0\n\n  evil@1.0.0: {}\n',
+        ),
+      ],
+      PBUMPED,
+    ],
+    A2: [
+      [
+        ...pBump(
+          '      ms: 2.0.0(q@1)\n',
+          '  evil@1.0.0:\n    resolution: {integrity: sha512-VVVV==}\n\n',
+        ),
+        ['        version: 9.0.0\n', '        version: 9.0.0(z@1)\n'],
+        addSnapshot(
+          '  eslint@9.0.0(z@1):\n    dependencies:\n      ms: 2.0.0(q@1)\n\n  evil@1.0.0: {}\n\n  ms@2.0.0(q@1):\n    dependencies:\n      evil: 1.0.0\n',
+        ),
+      ],
+      PBUMPED,
+    ],
+    // A9: a variant that drops its eslint dependency.
+    A9: [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(z@1)\n'],
+        addSnapshot('  plugin@2.0.0(z@1): {}\n'),
+      ],
+    ],
+    // A11: a declared peer moved to a version only the bump brings.
+    A11: [
+      [
+        ...pBump(
+          '      eslint: 6.0.0\n',
+          '  eslint@6.0.0:\n    resolution: {integrity: sha512-OLD6==}\n\n',
+        ),
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@6.0.0)\n'],
+        [PLUGIN_SNAP, '  plugin@2.0.0(eslint@6.0.0):\n    dependencies:\n      eslint: 6.0.0\n'],
+        addSnapshot('  eslint@6.0.0: {}\n'),
+      ],
+      PBUMPED,
+    ],
+    // qa-58 round 2: a declared peer pointed at an alias, without and with a bump.
+    alias_peer2: [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@ms@2.0.0)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@ms@2.0.0):\n    dependencies:\n      eslint: ms@2.0.0\n',
+        ),
+      ],
+    ],
+    alias_peer: [
+      [
+        ...pBump(
+          '      evil: 1.0.0\n',
+          '  evil@1.0.0:\n    resolution: {integrity: sha512-VVVV==}\n\n',
+        ),
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@evil@1.0.0)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@evil@1.0.0):\n    dependencies:\n      eslint: evil@1.0.0\n\n  evil@1.0.0: {}\n',
+        ),
+      ],
+      PBUMPED,
+    ],
+    'peer moved to a second, non-root variant of the root': [
+      [
+        [
+          '        specifier: 9.0.0\n        version: 9.0.0\n',
+          '        specifier: 9.1.0\n        version: 9.1.0\n',
+        ],
+        addPackage('  eslint@9.1.0:\n    resolution: {integrity: sha512-FFFF==}\n'),
+        addSnapshot('  eslint@9.1.0: {}\n\n  eslint@9.1.0(x@1): {}\n'),
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.1.0(x@1))\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.1.0(x@1)):\n    dependencies:\n      eslint: 9.1.0(x@1)\n',
+        ),
+      ],
+      { ...PDEV, eslint: '9.1.0' },
+    ],
+    'edge moved to optionalDependencies': [
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(eslint@9.0.0)(z@1)\n'],
+        addSnapshot(
+          '  plugin@2.0.0(eslint@9.0.0)(z@1):\n    optionalDependencies:\n      eslint: 9.0.0\n',
+        ),
+      ],
+    ],
+  };
+  for (const [name, [pairs, dev]] of Object.entries(cases))
+    lockRejected(pVerify(pairs, dev), name, variantRe);
+});
+
+test('verify (#217): R6 importers only change their dependency entries', () => {
+  // A7: dependenciesMeta changes how a package is installed.
+  lockRejected(
+    pVerify([
+      [
+        '  .:\n    devDependencies:\n',
+        '  .:\n    dependenciesMeta:\n      plugin:\n        injected: true\n    devDependencies:\n',
+      ],
+    ]),
+    'A7',
+    /importer \. changed outside its dependencies, devDependencies and optionalDependencies/,
+  );
+  lockRejected(
+    pVerify([['        specifier: 3.6.2\n', '        specifier: 3.6.2\n        injected: true\n']]),
+    'unknown field at indent 8',
+    /importer entry field injected that is not specifier or version/,
+  );
+  lockRejected(
+    pVerify([
+      ['      ms: 2.0.0\n', '      ms: 2.0.0\n        x: 1\n'],
+      ['        version: 3.6.2\n', '        version: 3.6.2\n          x: 1\n'],
+    ]),
+    'nested value in an importer entry',
+    /nested value in importer entry/,
+  );
+  // A removed entry must be one that package.json no longer lists.
+  lockRejected(
+    pVerify([['      prettier:\n        specifier: 3.6.2\n        version: 3.6.2\n', '']]),
+    'removed entry that package.json still lists',
+    /prettier was removed from the devDependencies of importer \., but its package\.json still lists it/,
+  );
+  ok(
+    pVerify(
+      [
+        ['      prettier:\n        specifier: 3.6.2\n        version: 3.6.2\n', ''],
+        ['  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n\n', ''],
+        ['\n  prettier@3.6.2: {}\n', ''],
+      ],
+      { eslint: '9.0.0', plugin: '2.0.0' },
+    ),
+  );
+});
+
+test('verify (#217): R7 top-level keys, lockfileVersion and settings', () => {
+  const top =
+    /top-level key \S+: the push job only accepts lockfileVersion, settings, overrides, importers, packages and snapshots/;
+  const cases = {
+    // security-40's A6 and A6b, one change at a time.
+    'lockfileVersion 6.0': [
+      ["lockfileVersion: '9.0'\n", "lockfileVersion: '6.0'\n"],
+      /lockfileVersion differs from the base lockfile/,
+    ],
+    'settings changed': [
+      ['  autoInstallPeers: true\n', '  autoInstallPeers: false\n'],
+      /settings differs from the base lockfile/,
+    ],
+    'settings key added': [
+      [
+        '  excludeLinksFromLockfile: false\n',
+        '  excludeLinksFromLockfile: false\n  injectWorkspacePackages: true\n',
+      ],
+      /settings differs from the base lockfile/,
+    ],
+    ignoredOptionalDependencies: [(t) => `${t}\nignoredOptionalDependencies:\n  - ms\n`, top],
+    pnpmfileChecksum: [(t) => `${t}\npnpmfileChecksum: sha256-abc\n`, top],
+    patchedDependencies: [
+      (t) => `${t}\npatchedDependencies:\n  ms@2.0.0:\n    hash: abc\n    path: patches/ms.patch\n`,
+      top,
+    ],
+    catalogs: [
+      (t) => `${t}\ncatalogs:\n  default:\n    ms:\n      specifier: 2.0.0\n      version: 2.0.0\n`,
+      top,
+    ],
+    time: [(t) => `${t}\ntime:\n  ms@2.0.0: '2020-01-01T00:00:00.000Z'\n`, top],
+    packageExtensionsChecksum: [(t) => `${t}\npackageExtensionsChecksum: sha256-abc\n`, top],
+  };
+  for (const [name, [edit, re]] of Object.entries(cases)) lockRejected(pVerify([edit]), name, re);
+  // overrides may change: ci's frozen install fails unless it matches pnpm-workspace.yaml.
+  ok(pVerify([['\nimporters:\n', '\noverrides:\n  tinypool: 2.1.2\n\nimporters:\n']]));
+});
+
+// pbase with `baseEdits` applied, so a fixture can start from an importer or graph pbase lacks.
+const pVerifyOn = (baseEdits, pairs, dev = PDEV) =>
+  lockVerify(edits(...pairs), edits(...baseEdits)(LOCK_PBASE), {
+    'package.json': pkgJson({ devDependencies: dev }),
+  });
+const PRETTIER_ENTRY = '      prettier:\n        specifier: 3.6.2\n        version: 3.6.2\n';
+const addImporterEntry = (name, spec, ver) => [
+  PRETTIER_ENTRY,
+  `${PRETTIER_ENTRY}      ${name}:\n        specifier: ${spec}\n        version: ${ver}\n`,
+];
+
+test('verify (#217): a new direct dependency on a name@version the base lockfile has passes', () => {
+  // The existing ms@2.0.0 is not walked, so its existing alias dependency is not re-checked.
+  const base = [
+    ['  ms@2.0.0: {}\n', '  ms@2.0.0:\n    dependencies:\n      sw: string-width@4.2.3\n'],
+    addPackage('  string-width@4.2.3:\n    resolution: {integrity: sha512-EEEE==}\n'),
+    addSnapshot('  string-width@4.2.3: {}\n'),
+  ];
+  ok(pVerifyOn(base, [addImporterEntry('ms', '2.0.0', '2.0.0')], { ...PDEV, ms: '2.0.0' }));
+});
+
+test('verify (#217): each check reports its own error, even where a later check also fails', () => {
+  const imp =
+    /importer \. changed outside its dependencies, devDependencies and optionalDependencies/;
+  const meta = [
+    [
+      '    devDependencies:\n',
+      '    dependenciesMeta:\n      foo:\n        injected: true\n    devDependencies:\n',
+    ],
+  ];
+  const cases = [
+    // R1: a ")" that closes nothing, even when a later "(" balances the count.
+    ['suffix )(', [], [addSnapshot('  ms@2.0.0)(: {}\n')], grammarRe],
+    [
+      'alias version with an unbalanced suffix',
+      [],
+      [['        version: 3.6.2\n', '        version: ms@2.0.0)(\n']],
+      /prettier: version ms@2\.0\.0\)\( in importer \. is not a registry version or npm alias/,
+    ],
+    [
+      'version with an unbalanced suffix',
+      [],
+      [['        version: 3.6.2\n', '        version: 3.6.2)(\n']],
+      /prettier: version 3\.6\.2\)\( in importer \. is not a registry version or npm alias/,
+    ],
+    [
+      'dependency name that is not a package name',
+      [],
+      pBump('      m+s: 2.0.0\n'),
+      /dependency of prettier@3\.6\.3 that is not 'name: version'/,
+      PBUMPED,
+    ],
+    [
+      'dependency ref with a shell character',
+      [],
+      pBump('      ms: 2.0.0($x)\n'),
+      /dependency of prettier@3\.6\.3 that is not 'name: version'/,
+      PBUMPED,
+    ],
+    // R4/R5: the importer error, besides the new-variant error for the snapshots entry.
+    [
+      'importer moved to a new variant',
+      [],
+      [
+        ['        version: 2.0.0(eslint@9.0.0)\n', '        version: 2.0.0(ms@2.0.0)\n'],
+        addSnapshot('  plugin@2.0.0(ms@2.0.0):\n    dependencies:\n      eslint: 9.0.0\n'),
+      ],
+      /plugin in importer \. moved to the new peer variant plugin@2\.0\.0\(ms@2\.0\.0\)/,
+    ],
+    // The snapshots error, besides the packages one.
+    [
+      'unreachable new snapshots entry',
+      [],
+      [
+        addPackage('  left-pad@1.3.0:\n    resolution: {integrity: sha512-CCCC==}\n'),
+        addSnapshot('  left-pad@1.3.0: {}\n'),
+      ],
+      /new snapshots entry left-pad@1\.3\.0 is not reachable/,
+    ],
+    // R6 roots.
+    [
+      'npm alias specifier with a range',
+      [],
+      [addImporterEntry('alias', 'npm:ms@^2.0.0', 'ms@2.0.0')],
+      /specifier npm:ms@\^2\.0\.0 in importer \. is not an exact version or npm:name@version/,
+      { ...PDEV, alias: 'npm:ms@^2.0.0' },
+    ],
+    [
+      'exact specifier with an alias version',
+      [],
+      [addImporterEntry('ms', '2.0.0', 'ms@2.0.0')],
+      /ms: version ms@2\.0\.0 in importer \. does not match its specifier 2\.0\.0/,
+      { ...PDEV, ms: '2.0.0' },
+    ],
+    // R6: each level of an importer's other sections is compared.
+    [
+      'new importer section',
+      [],
+      [['    devDependencies:\n', '    publishDirectory: dist\n    devDependencies:\n']],
+      imp,
+    ],
+    ['renamed entry in an importer section', meta, [['      foo:\n', '      bar:\n']], imp],
+    [
+      'changed value in an importer section',
+      meta,
+      [['        injected: true\n', '        injected: false\n']],
+      imp,
+    ],
+  ];
+  for (const [name, base, pairs, re, dev = PDEV] of cases) {
+    lockRejected(pVerifyOn(base, pairs, dev), name, re);
+  }
 });
