@@ -314,17 +314,17 @@ export function assertNotTruncated(kind, count, cap) {
   }
 }
 
-export async function prFilesAndLabels(repo, pr) {
+export async function prFilesAndLabels(repo, pr, api = gh) {
   const files = [];
   const apiFiles = [];
   for (let page = 1; ; page++) {
-    const batch = await gh(`repos/${repo}/pulls/${pr}/files?per_page=100&page=${page}`);
+    const batch = await api(`repos/${repo}/pulls/${pr}/files?per_page=100&page=${page}`);
     apiFiles.push(...batch);
     files.push(...changedPaths(batch));
     if (batch.length < 100) break;
   }
   assertNotTruncated('files', apiFiles.length, FILES_CAP);
-  const issue = await gh(`repos/${repo}/issues/${pr}`);
+  const issue = await api(`repos/${repo}/issues/${pr}`);
   return { files, apiFiles, labels: issue.labels.map((l) => l.name), body: issue.body ?? '' };
 }
 
@@ -427,8 +427,12 @@ export async function manifestProofs(repo, pr, apiFiles, api = gh) {
  * and at the PR head, from the git trees and blobs by sha. Fails closed to [''] (every path):
  * a truncated tree, any fetch or decode problem, a symlinked or unparsable manifest, a
  * package.yaml or package.json5 (the gate cannot parse them), a script that is not a string,
- * or a script word the gate cannot resolve (shell expansion, quotes, inline code, an absolute
- * path or one that leaves the repo). Never throws.
+ * a symlink under a covered directory (it can point anywhere), or a script the gate cannot
+ * resolve (see scriptTargetDirs: any program other than node or node-gyp, so `pnpm run x`,
+ * `pnpm -r`, `--filter`, npx and workspace bins all fail closed; shell expansion, quotes,
+ * inline code, a package specifier, an absolute path or one that leaves the repo).
+ * Not followed: what the entry file imports from outside the covered directories, and the
+ * `<!(...)` command expansions and `sources` of a binding.gyp (docs/SECURITY.md). Never throws.
  * @param {(path: string) => Promise<any>} api GitHub REST GET (injected for tests)
  * @returns {Promise<{ dirs: string[], notes: string[] }>} lowercased directories, '' = every path
  */
@@ -444,34 +448,57 @@ const SHA = /^[0-9a-f]{40}$/;
 const MANIFEST = /(^|\/)package\.(json|yaml|json5)$/i;
 const ALT_MANIFEST = /(^|\/)package\.(yaml|json5)$/i;
 const BINDING_GYP = /(^|\/)binding\.gyp$/i;
-/** Characters of a script word the gate can resolve; anything else fails closed. */
-const PLAIN_WORD = /^[A-Za-z0-9._/@:+,=-]*$/;
 /**
- * Words after which the gate can no longer tell what runs: inline code (-e, -p, -c, --eval,
- * --print) and anything that moves the working directory (cd, pushd, -C, --prefix, --dir,
- * --cwd), since later relative paths would then resolve somewhere else.
+ * Characters of a script word the gate can resolve; anything else fails closed. No `@` (a
+ * scoped package specifier such as `-r @pwp/core` loads another workspace package), no `:`
+ * (data:, file: and node: URLs), no quotes, `$`, globs, `~` or backslashes.
  */
-const OPAQUE_WORD = /^(cd|pushd|-[epcC]|--(eval|print|prefix|dir|cwd)(=.*)?)$/;
+const PLAIN_WORD = /^[A-Za-z0-9._/+=-]*$/;
+/**
+ * Words after which the gate can no longer tell what runs: inline code in any short-option
+ * group holding e, p, c or C (-e, -pe, -ec, -lc, -C) or --eval / --print, and anything that
+ * moves the working directory (cd, pushd, --prefix, --dir, --cwd), since later relative paths
+ * would then resolve somewhere else.
+ */
+const OPAQUE_WORD = /^(cd|pushd|-[A-Za-z]*[epcC][A-Za-z]*|--(eval|print|prefix|dir|cwd)(=.*)?)$/;
+/**
+ * The only programs a command in an install script may start with. Anything else can run
+ * code the gate does not see: `pnpm run x` / `npm run x` / `pnpm x` (another script),
+ * `pnpm -r`, `--filter` (other packages' scripts), npx / pnpx / dlx, sh -c, a workspace bin.
+ */
+const PROGRAMS = new Set(['node', 'node-gyp']);
 const dirOf = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
 
 /**
  * Directories (repo-relative) holding the paths an install script command names, for a
- * manifest in `dir` ('' for the root). Bare words (`node`, `node-gyp`, `rebuild`) name no
- * path. Throws when a word cannot be resolved, so the caller fails closed.
+ * manifest in `dir` ('' for the root). Each command (split at ;, &&, ||, |, &, parentheses
+ * and newlines) must start with a PROGRAMS entry. After it, a bare word (`rebuild`,
+ * `setup.mjs`, `tsx`) names no path outside `dir`: it is an option, a file in the covered
+ * manifest directory, or an unscoped dependency name, which the lockfile already covers
+ * (workspace packages are scoped, and `@` fails closed). Throws when a command cannot be
+ * resolved, so the caller fails closed.
  */
 export function scriptTargetDirs(dir, command) {
   if (typeof command !== 'string') throw new Error('a script is not a string');
   const out = new Set();
-  for (const word of command.split(/[\s;&|()<>]+/)) {
-    if (!PLAIN_WORD.test(word) || OPAQUE_WORD.test(word))
-      throw new Error(`cannot resolve script word ${JSON.stringify(word)}`);
-    for (const piece of word.split('=')) {
-      if (!piece.includes('/') && !piece.startsWith('.')) continue;
-      if (piece.startsWith('/')) throw new Error(`absolute path ${piece} in a script`);
-      const p = posix.normalize(posix.join(dir || '.', piece)).replace(/\/+$/, '');
-      if (p === '..' || p.startsWith('../'))
-        throw new Error(`script path ${piece} leaves the repo`);
-      out.add(p === '.' ? '' : dirOf(p));
+  for (const segment of command.split(/&&|\|\||[;|&()\n]/)) {
+    const words = segment.split(/[\s<>]+/).filter(Boolean);
+    if (!words.length) continue;
+    if (!PROGRAMS.has(words[0]))
+      throw new Error(
+        `cannot resolve script program ${JSON.stringify(words[0])} (only node and node-gyp)`,
+      );
+    for (const word of words.slice(1)) {
+      if (!PLAIN_WORD.test(word) || OPAQUE_WORD.test(word))
+        throw new Error(`cannot resolve script word ${JSON.stringify(word)}`);
+      for (const piece of word.split('=')) {
+        if (!piece.includes('/') && !piece.startsWith('.')) continue;
+        if (piece.startsWith('/')) throw new Error(`absolute path ${piece} in a script`);
+        const p = posix.normalize(posix.join(dir || '.', piece)).replace(/\/+$/, '');
+        if (p === '..' || p.startsWith('../'))
+          throw new Error(`script path ${piece} leaves the repo`);
+        out.add(p === '.' ? '' : dirOf(p));
+      }
     }
   }
   return [...out];
@@ -503,6 +530,8 @@ async function scanInstallScripts(repo, pr, api) {
 
   const manifests = new Map(); // path -> Set of blob shas seen at any of the commits
   const dirs = new Set();
+  const gyps = new Set(); // binding.gyp paths, noted once
+  const symlinks = new Set(); // symlink paths at any of the commits
   for (const commit of new Set([mergeBase, tip, head])) {
     const c = await api(`repos/${repo}/git/commits/${commit}`);
     const treeSha = c?.tree?.sha;
@@ -513,7 +542,9 @@ async function scanInstallScripts(repo, pr, api) {
     for (const e of tree.tree) {
       const path = e?.path;
       if (typeof path !== 'string' || e.type !== 'blob') continue;
-      if (BINDING_GYP.test(path)) {
+      if (e.mode === '120000') symlinks.add(path);
+      if (BINDING_GYP.test(path) && !gyps.has(path)) {
+        gyps.add(path);
         dirs.add(dirOf(path));
         notes.push(`${path}: pnpm runs node-gyp, ${dirOf(path) || 'every path'} counts`);
       }
@@ -553,7 +584,12 @@ async function scanInstallScripts(repo, pr, api) {
     }
   }
   const lower = [...new Set([...dirs].map((d) => d.toLowerCase()))].sort();
-  return { dirs: lower.includes('') ? [''] : lower, notes };
+  const result = lower.includes('') ? [''] : lower;
+  // A symlink under a covered directory can make the install code read any file in the repo.
+  for (const l of symlinks)
+    if (coveredByInstallScript(l, result))
+      throw new Error(`${l} is a symlink under a covered directory`);
+  return { dirs: result, notes };
 }
 
 /**
@@ -583,6 +619,39 @@ export async function prAuthorAndCommits(repo, pr) {
   return { user: { login: u.login, type: u.type, id: u.id }, commits };
 }
 
+/**
+ * The whole gate for one PR, as the CLI runs it: files and labels, the manifest proofs, the
+ * install-script coverage (#176), then evaluate(). Exported so a test can drive it end to end
+ * with a fake API and prove every input reaches evaluate().
+ * @param {(path: string) => Promise<any>} [api] GitHub REST GET
+ * @param {{ log?: (s: string) => void, error?: (s: string) => void }} [out]
+ * @returns {Promise<number>} the exit code: 0 when every required approval is present
+ */
+export async function runGate(
+  repo,
+  pr,
+  api = gh,
+  { log = console.log, error = console.error } = {},
+) {
+  let files, apiFiles, labels;
+  try {
+    ({ files, apiFiles, labels } = await prFilesAndLabels(repo, pr, api));
+  } catch (e) {
+    error(e.message);
+    return 1;
+  }
+  const { noDependencyChange, notes } = await manifestProofs(repo, pr, apiFiles, api);
+  const install = await installScriptCoverage(repo, pr, api);
+  for (const n of [...notes, ...install.notes]) log(`· ${n}`);
+  const r = evaluate(files, labels, { noDependencyChange, installScriptDirs: install.dirs });
+  for (const [a, reasons] of r.required)
+    log(`${labels.includes(a) ? '✓' : '✗'} ${a}\n    ${reasons.join('\n    ')}`);
+  if (r.blocking) error('\n✗ security:blocking is set. Only the Security Reviewer can lift it.');
+  if (r.missing.length || r.blocking) return 1;
+  log('\nreview-gate: OK');
+  return 0;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repo = process.env.GITHUB_REPOSITORY;
   const pr = process.argv[2] ?? process.env.PR_NUMBER;
@@ -590,21 +659,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… review-gate <pr-number>');
     process.exit(2);
   }
-  let files, apiFiles, labels;
-  try {
-    ({ files, apiFiles, labels } = await prFilesAndLabels(repo, pr));
-  } catch (e) {
-    console.error(e.message);
-    process.exit(1);
-  }
-  const { noDependencyChange, notes } = await manifestProofs(repo, pr, apiFiles);
-  const install = await installScriptCoverage(repo, pr);
-  for (const n of [...notes, ...install.notes]) console.log(`· ${n}`);
-  const r = evaluate(files, labels, { noDependencyChange, installScriptDirs: install.dirs });
-  for (const [a, reasons] of r.required)
-    console.log(`${labels.includes(a) ? '✓' : '✗'} ${a}\n    ${reasons.join('\n    ')}`);
-  if (r.blocking)
-    console.error('\n✗ security:blocking is set. Only the Security Reviewer can lift it.');
-  if (r.missing.length || r.blocking) process.exit(1);
-  console.log('\nreview-gate: OK');
+  process.exitCode = await runGate(repo, pr);
 }

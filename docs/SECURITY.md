@@ -73,16 +73,30 @@ No manifest has an install-type lifecycle script today, and adding one is a depe
 
 - any path under the manifest's directory, because the entry file imports its neighbours. For the root manifest, that means every path;
 - any path under the directory of a path the script names. For example, `node ../../tools/setup.mjs` in `packages/ui` covers `tools/`;
-- any edit to the manifest itself, because pnpm passes every field to the script as `npm_package_*` variables. Only a whitespace-only reformat is exempt.
+- any edit to the manifest itself, because pnpm passes every field to the script as `npm_package_*` variables. The manifest sits in its own covered directory, so even a whitespace-only reformat needs the dependency row.
 
 The coverage fails closed, so every changed path then needs the dependency row, in each of these cases:
 
 - the GitHub API fails or returns a truncated tree;
 - a manifest is a symlink, cannot be parsed, or is a `package.yaml` or `package.json5`;
+- a symlink sits under a covered directory, at any of the three commits, because it can point anywhere;
 - a script is not a string;
-- a script word cannot be resolved. That covers shell variables, quotes, globs, `~`, backslashes, inline code (`-e`, `-p`, `-c`, `--eval`, `--print`), anything that changes the working directory (`cd`, `pushd`, `-C`, `--prefix`, `--dir`, `--cwd`), an absolute path, and a path that leaves the repo.
+- a command in an install script starts with any program other than `node` or `node-gyp`. Commands are split at `;`, `&&`, `||`, `|`, `&`, parentheses and newlines. This is how the gate handles indirection: it does not follow `pnpm run setup`, `npm run setup` or `pnpm setup` to the named script, and it does not follow `pnpm -r`, `--filter`/`-F`, `exec`, `dlx`, `npx`, `sh -c` or a workspace bin to the code they run. Each of these fails closed instead;
+- a word after the program cannot be resolved. That covers:
+  - shell variables, quotes, globs, `~` and backslashes;
+  - `@` (a scoped package specifier such as `-r @pwp/core`) and `:` (`data:`, `file:` and `node:` URLs);
+  - inline code: any short-option group that contains `e`, `p`, `c` or `C` (`-e`, `-pe`, `-ec`), and `--eval` or `--print`;
+  - anything that changes the working directory (`cd`, `pushd`, `--prefix`, `--dir`, `--cwd`);
+  - an absolute path, and a path that leaves the repo.
+
+A bare word after `node` (`rebuild`, `setup.mjs`, `tsx`) names nothing outside the covered directory. It is an option, a file in the manifest's own directory, or an unscoped dependency name that the lockfile already covers. Workspace packages are scoped, so `@` fails closed.
 
 If a workspace package ever needs an install script, keep it to `node <relative path>`.
+
+Not followed, so review these by hand when an install script exists:
+
+- what the entry file imports from outside the covered directories, for example `import '@pwp/core'` or `../../lib/x.mjs` from a file that the script did not name;
+- the `<!(...)` command expansions and the `sources` of a `binding.gyp`, which can point outside its directory.
 
 Residual risk: the base branch can move between the last gate run and the merge. If an install script lands on `main` in that window, an already-green PR that changes its target is not re-checked. Re-run `review-gate` before merging when `main` has moved.
 

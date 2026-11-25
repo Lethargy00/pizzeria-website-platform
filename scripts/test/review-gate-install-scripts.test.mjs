@@ -9,6 +9,7 @@ import {
   evaluate,
   dependencyFieldsChanged,
   installScriptCoverage,
+  runGate,
   scriptTargetDirs,
   coveredByInstallScript,
   INSTALL_SCRIPTS,
@@ -33,7 +34,14 @@ const nextSha = () => (++blobCounter).toString(16).padStart(40, '0');
  * {text, mode} to model a symlink). Blobs are addressed by sha, like the real API.
  * `fail` makes any matching call throw; `patch` rewrites a response.
  */
-function fakeApi({ trees, fail = () => false, patch = (_p, r) => r, baseRef = 'main' }) {
+function fakeApi({
+  trees,
+  fail = () => false,
+  patch = (_p, r) => r,
+  baseRef = 'main',
+  prFiles = [],
+  labels = [],
+}) {
   const blobs = new Map();
   const treeOf = {};
   for (const [commit, files] of Object.entries(trees)) {
@@ -58,6 +66,12 @@ function fakeApi({ trees, fail = () => false, patch = (_p, r) => r, baseRef = 'm
   function answer(path) {
     if (path === 'repos/o/r/pulls/1')
       return { base: { sha: PULL_BASE, ref: baseRef }, head: { sha: HEAD } };
+    if (path.startsWith('repos/o/r/pulls/1/files?'))
+      return path.endsWith('page=1')
+        ? prFiles.map((filename) => ({ filename, status: 'modified', sha: nextSha() }))
+        : [];
+    if (path === 'repos/o/r/issues/1')
+      return { labels: labels.map((name) => ({ name })), body: '' };
     if (path === `repos/o/r/compare/${PULL_BASE}...${HEAD}?per_page=1`)
       return { merge_base_commit: { sha: MB } };
     if (path === `repos/o/r/git/ref/heads/${baseRef}`)
@@ -172,10 +186,33 @@ test('install: an install script in the root manifest covers every path', async 
 });
 
 test('install: a binding.gyp makes pnpm run node-gyp, so its directory is covered', async () => {
-  const { dirs } = await coverage(
+  const { dirs, notes } = await coverage(
     repo({ ...ROOT, [UI]: plain, 'packages/ui/Binding.GYP': "{ 'targets': [] }" }),
   );
   assert.deepEqual(dirs, ['packages/ui']);
+  assert.equal(notes.filter((n) => n.includes('Binding.GYP')).length, 1, 'noted once');
+});
+
+test('install: a symlink under a covered directory fails closed', async () => {
+  const link = { text: '../../tools/real.mjs', mode: '120000' };
+  const r = await coverage(repo({ ...ROOT, [UI]: withPost(), 'packages/ui/lib/x.mjs': link }));
+  assert.deepEqual(r.dirs, ['']);
+  assert.match(r.notes.join('\n'), /symlink under a covered directory/);
+  // Only at one commit is enough.
+  const r2 = await coverage(
+    repo({ ...ROOT, [UI]: withPost() }, { [HEAD]: { 'packages/ui/lib/x.mjs': link } }),
+  );
+  assert.deepEqual(r2.dirs, ['']);
+});
+
+test('install: a symlink outside every covered directory is ignored', async () => {
+  const link = { text: '../x', mode: '120000' };
+  const { dirs } = await coverage(
+    repo({ ...ROOT, [UI]: withPost(), 'packages/core/lib/x.mjs': link }),
+  );
+  assert.deepEqual(dirs, ['packages/ui', 'packages/ui/scripts']);
+  const none = await coverage(repo({ ...ROOT, [UI]: plain, 'packages/ui/lib/x.mjs': link }));
+  assert.deepEqual(none.dirs, [], 'no install script, nothing covered');
 });
 
 test('install: a script declared only at the merge base still covers its directory', async () => {
@@ -326,10 +363,82 @@ test('install: evaluate without installScriptDirs keeps the old behaviour', () =
 
 // --- scriptTargetDirs ----------------------------------------------------------------------
 
-test('targets: bare words name no path', () => {
+test('targets: bare words after node or node-gyp name no path', () => {
   assert.deepEqual(scriptTargetDirs('packages/ui', 'node-gyp rebuild'), []);
-  assert.deepEqual(scriptTargetDirs('packages/ui', 'husky'), []);
+  assert.deepEqual(scriptTargetDirs('packages/ui', 'node --import tsx setup.ts'), []);
   assert.deepEqual(scriptTargetDirs('packages/ui', ''), []);
+  assert.deepEqual(scriptTargetDirs('packages/ui', 'node a.mjs;'), []);
+});
+
+// qa-66 / pr-reviewer round 1: a program other than node or node-gyp can run code the gate
+// does not see (another script, other packages' scripts, a workspace bin), so it fails closed.
+for (const cmd of [
+  'pnpm run setup',
+  'npm run setup',
+  'npm run-script setup',
+  'pnpm setup',
+  'pnpm build',
+  'pnpm -r build',
+  'pnpm -r run build',
+  'pnpm --filter @pwp/core build',
+  'pnpm -F @pwp/cli run build',
+  'pnpm exec x',
+  'pnpm dlx x',
+  'npx x',
+  'pnpx x',
+  'yarn build',
+  'husky',
+  'my-workspace-bin',
+  'sh ./setup.sh',
+  'bash -lc node',
+  'sh -ec node',
+  'env NODE_OPTIONS=--require=./x.cjs node a.mjs',
+  'NODE_OPTIONS=--require=./x.cjs node a.mjs',
+  'node a.mjs && pnpm run setup',
+  'node a.mjs || npx x',
+  'node a.mjs | sh',
+  '(pnpm run setup)',
+  'node a.mjs\npnpm run setup',
+  'node a.mjs 2>&1',
+]) {
+  test(`targets: ${JSON.stringify(cmd)} fails closed`, () => {
+    assert.throws(() => scriptTargetDirs('packages/ui', cmd), /cannot resolve/);
+  });
+}
+
+for (const cmd of [
+  'node -pe x',
+  'node -ep x',
+  'node -pe import(atob(dG9vbHMveC5tanM))',
+  'node -ie x',
+  'node -C dev a.mjs',
+  'node --print=x',
+  'node --eval x',
+  'node -r @pwp/core a.mjs',
+  'node --import=@pwp/core a.mjs',
+  'node --import=data:text/javascript,x a.mjs',
+  'node --import=file:../../tools/x.mjs a.mjs',
+]) {
+  test(`targets: ${JSON.stringify(cmd)} fails closed (inline code or a specifier)`, () => {
+    assert.throws(() => scriptTargetDirs('packages/ui', cmd), /cannot resolve/);
+  });
+}
+
+test('install: postinstall "pnpm run setup" fails closed, so setup\'s target is covered', async () => {
+  const man = j({
+    name: '@pwp/core',
+    scripts: { postinstall: 'pnpm run setup', setup: 'node ../../tools/x.mjs' },
+  });
+  const { dirs } = await coverage(repo({ ...ROOT, 'packages/core/package.json': man }));
+  assert.deepEqual(dirs, ['']);
+  assert.ok(
+    missing(['tools/x.mjs'], [], { installScriptDirs: dirs }).includes('approved:security'),
+  );
+});
+
+test('install: postinstall "pnpm -F x run y" fails closed', async () => {
+  const { dirs } = await coverage(repo({ ...ROOT, [UI]: withPost('pnpm -F @pwp/cli run build') }));
+  assert.deepEqual(dirs, ['']);
 });
 
 test('targets: paths resolve against the manifest directory', () => {
@@ -397,4 +506,61 @@ test('manifest: a reformat-only change with an install script is not a field cha
 test('manifest: without an install script, a description change is still not a dependency change', () => {
   const base = { name: '@pwp/ui', scripts: { test: 'vitest' }, description: 'a' };
   assert.equal(dependencyFieldsChanged(j(base), j({ ...base, description: 'b' })).changed, false);
+});
+
+// --- end to end: runGate, the CLI body (qa-66 round 1) --------------------------------------
+
+/** runGate with a fake API; returns the exit code and everything it printed. */
+async function gate(trees, prFiles, labels) {
+  const { api } = fakeApi({ trees, prFiles, labels });
+  const out = [];
+  const code = await runGate('o/r', 1, api, { log: (s) => out.push(s), error: (s) => out.push(s) });
+  return { code, out: out.join('\n') };
+}
+
+test('e2e: a PR changing a postinstall target fails without approved:security', async () => {
+  const trees = repo({ ...ROOT, [UI]: withPost() });
+  const files = ['packages/ui/scripts/setup.mjs'];
+  const r = await gate(trees, files, ['approved:peer', 'approved:a11y-perf']);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /✗ approved:security/);
+  assert.match(r.out, /✗ approved:architect/);
+  assert.match(r.out, /declares postinstall/);
+  const ok = await gate(trees, files, [
+    'approved:peer',
+    'approved:a11y-perf',
+    'approved:security',
+    'approved:architect',
+  ]);
+  assert.equal(ok.code, 0, ok.out);
+  assert.match(ok.out, /review-gate: OK/);
+});
+
+test('e2e: the same change passes with peer and a11y-perf when no install script exists', async () => {
+  const r = await gate(
+    repo({ ...ROOT, [UI]: plain }),
+    ['packages/ui/scripts/setup.mjs'],
+    ['approved:peer', 'approved:a11y-perf'],
+  );
+  assert.equal(r.code, 0, r.out);
+});
+
+test('e2e: an API failure in the coverage scan fails closed', async () => {
+  const { api } = fakeApi({
+    trees: repo({ ...ROOT, [UI]: plain }),
+    prFiles: ['docs/x.md'],
+    labels: ['approved:peer'],
+    fail: (p) => p.includes('/git/trees/'),
+  });
+  const out = [];
+  const code = await runGate('o/r', 1, api, { log: (s) => out.push(s), error: (s) => out.push(s) });
+  assert.equal(code, 1);
+  assert.match(out.join('\n'), /every path counts/);
+});
+
+test('e2e: a failing files call exits 1', async () => {
+  const { api } = fakeApi({ trees: repo(ROOT), fail: (p) => p.includes('/files?') });
+  const out = [];
+  assert.equal(await runGate('o/r', 1, api, { log: () => {}, error: (s) => out.push(s) }), 1);
+  assert.match(out.join('\n'), /500/);
 });
