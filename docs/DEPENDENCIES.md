@@ -16,6 +16,7 @@ The M1 tooling set below was approved as part of the foundation bootstrap, commi
 | `@playwright/test`  | 1.55.1  | E2E, visual regression, keyboard tests         | Apache-2.0 |
 | `turbo`             | 2.5.4   | Task runner and caching                        | MIT        |
 | `zod`               | 4.6.7   | Runtime schema validation (`@pwp/schema` only) | MIT        |
+| `yaml`              | 2.9.1   | YAML parsing with source ranges (`@pwp/cli`)   | ISC        |
 
 Notes:
 
@@ -33,3 +34,16 @@ Notes:
 - `pnpm audit` on this change: no advisories for `zod`. The six existing findings (`turbo` ×2, `vitest`, `@vitest/mocker` ×2, `minimatch`) are unrelated to this change.
 - Binding conditions for contracts (#22 and later): tenant-input and request-body schemas use `strictObject` (unknown keys are errors); `SafeUrl` needs an explicit scheme allow-list because `z.url()` accepts `javascript:`; strings and arrays carry `.max()` limits.
 - Client-side validation in islands (M7) is a separate decision against the 50 KB budget (likely `zod/mini`).
+
+### yaml (approved in #19)
+
+- Runtime `dependencies` of `@pwp/cli`; `devDependencies` of `@pwp/schema` (YAML fixtures in `*.test.ts` only, never imported from `packages/schema/src/` outside tests, so `@pwp/schema` stays format-agnostic for the CMS `ContentSource`, #28). No other `package.json` declares it. `@pwp/core` does no file formats.
+- Approved by `architect` and `security` on #19; placement and options recorded in ADR 0002. License ISC, 0 dependencies, no install scripts (the only script named like one, `docs:install`, is repo-only). Published 2026-09-11. No npm provenance attestation; security accepted that because of the zero-dependency footprint and the integrity hash in the lockfile. Do not use the `3.0.0-*` prereleases.
+- Advisories at approval (2026-11-20): `npm audit` reports none for 2.9.1. CVE-2023-2251 (uncaught exception, below 2.2.2) does not apply.
+- `astro@7.4.7` (#20) resolves `yaml` to 2.9.1 as well, so there is one copy.
+- Binding conditions (ADR 0002, implemented by `parseTenantYaml` in #53, the only call site):
+  - `parseDocument(src, { version: '1.2', schema: 'core', merge: false, strict: true, uniqueKeys: true, stringKeys: true, prettyErrors: true, lineCounter, customTags: [] })`, then `doc.toJS({ maxAliasCount: 0 })` (no anchors or aliases in tenant content).
+  - `doc.errors` and `doc.warnings` both count as validation errors (unknown and `!!js/...` tags only raise a warning).
+  - Never register custom tags, use the `yaml-1.1` schema or a `reviver`. The package's `yaml` bin is not used by any script.
+  - File size is checked before parsing (T15); the result goes straight into the `strictObject` schemas.
+  - Invalid fixtures: alias bomb, unknown and `!!js` tags, duplicate keys, a `__proto__` key, a merge key.
