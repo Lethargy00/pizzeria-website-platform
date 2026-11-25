@@ -117,6 +117,36 @@ const parseObject = (text) => {
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
+ * Globs of the security row (needs approved:security). Exported so tests read the list itself
+ * instead of parsing source text; build it with spreads if you like, the export is the full list.
+ * Every glob needs a CODEOWNERS security note (checked by review-gate-richtext.test.mjs).
+ */
+export const SECURITY_PATHS = [
+  'packages/functions/**',
+  'packages/adapters/**',
+  'packages/ui/src/components/*Form*/**',
+  'packages/**/sanitize*/**',
+  'packages/**/*sanitiz*',
+  'packages/**/csp/**',
+  'packages/**/*csp*',
+  'packages/**/headers/**',
+  'packages/cli/src/build/**',
+  'packages/cli/src/isolation/**',
+  '.github/workflows/**',
+  'scripts/tenant-guard.mjs',
+  'scripts/review-gate.mjs',
+  'scripts/touches-guard.mjs',
+  'scripts/*-guard.mjs', // every gate script, including future ones (#93)
+  'scripts/lib/**', // shared by the gates: glob.mjs can blind them all (#93)
+  'scripts/check-licenses.mjs', // the license gate in security.yml (#128)
+  '**/.env.example',
+  'SECURITY.md',
+  'docs/SECURITY.md',
+  'docs/THREAT-MODEL.md',
+  '.github/CODEOWNERS',
+];
+
+/**
  * Which dependency fields differ between two package.json texts. Fails closed: if either side
  * is not a string, does not parse, or is not a JSON object, or the comparison itself throws
  * (JSON.stringify raises RangeError on very deep nesting, #120), the answer is "changed".
@@ -183,32 +213,7 @@ export const MATRIX = [
     id: 'security',
     approval: 'approved:security',
     why: 'security-sensitive path',
-    when: (f, labels) =>
-      labels.includes('security:sensitive') ||
-      reviewed(f, [
-        'packages/functions/**',
-        'packages/adapters/**',
-        'packages/ui/src/components/*Form*/**',
-        'packages/**/sanitize*/**',
-        'packages/**/*sanitiz*',
-        'packages/**/csp/**',
-        'packages/**/*csp*',
-        'packages/**/headers/**',
-        'packages/cli/src/build/**',
-        'packages/cli/src/isolation/**',
-        '.github/workflows/**',
-        'scripts/tenant-guard.mjs',
-        'scripts/review-gate.mjs',
-        'scripts/touches-guard.mjs',
-        'scripts/*-guard.mjs', // every gate script, including future ones (#93)
-        'scripts/lib/**', // shared by the gates: glob.mjs can blind them all (#93)
-        'scripts/check-licenses.mjs', // the license gate in security.yml (#128)
-        '**/.env.example',
-        'SECURITY.md',
-        'docs/SECURITY.md',
-        'docs/THREAT-MODEL.md',
-        '.github/CODEOWNERS',
-      ]),
+    when: (f, labels) => labels.includes('security:sensitive') || reviewed(f, SECURITY_PATHS),
   },
   {
     id: 'richtext',
