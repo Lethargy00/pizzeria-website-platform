@@ -5,6 +5,7 @@
 import { pathToFileURL } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { walk } from './lib/fs-walk.mjs';
+import { foldCase } from './lib/glob.mjs';
 
 export const ALLOWED_EXT = new Set([
   '.yaml',
@@ -23,27 +24,66 @@ const ALLOWED_NAMES = new Set(['.gitkeep', 'README.md']);
 // every assets/ rule below.
 export const TENANT_FOLDERS = new Set(['assets', 'content']);
 // Must cover the basename of every review-gate DEPENDENCY_PATHS entry (#192); the drift test in
-// scripts/test/tenant-guard-names.test.mjs fails when one is missing.
+// scripts/test/tenant-guard-names.test.mjs fails when one is missing. Test names with
+// isForbiddenName, never against these patterns directly: it matches the name's nameKey (#210).
 export const FORBIDDEN_NAMES = [
-  /^package\.json$/i,
-  /^package\.json5$/i,
-  /^package\.yaml$/i,
-  /^package-lock\.json$/i,
-  /^pnpm-lock\.yaml$/i,
-  /^pnpm-workspace\.yaml$/i,
-  /^yarn\.lock$/i,
-  /^bun\.lockb?$/i,
-  /^npm-shrinkwrap\.json$/i,
-  /^\.npmrc$/i,
-  /^\.yarnrc(\.yml)?$/i,
-  /^\.pnpmfile\.cjs$/i,
-  /^\.pnpmfile\.mjs$/i,
-  /^node_modules$/i,
-  /^import-?map\.json$/i,
-  /^deno\.jsonc?$/i,
-  /^Makefile$/i,
-  /^Dockerfile$/i,
+  /^package\.json$/iu,
+  /^package\.json5$/iu,
+  /^package\.yaml$/iu,
+  /^package-lock\.json$/iu,
+  /^pnpm-lock\.yaml$/iu,
+  /^pnpm-workspace\.yaml$/iu,
+  /^yarn\.lock$/iu,
+  /^bun\.lockb?$/iu,
+  /^npm-shrinkwrap\.json$/iu,
+  /^\.npmrc$/iu,
+  /^\.yarnrc(\.yml)?$/iu,
+  /^\.pnpmfile\.cjs$/iu,
+  /^\.pnpmfile\.mjs$/iu,
+  /^node_modules$/iu,
+  /^import-?map\.json$/iu,
+  /^deno\.jsonc?$/iu,
+  /^Makefile$/iu,
+  /^Dockerfile$/iu,
 ];
+// Code points some filesystem or tool drops from a name: default-ignorables (zero-width joiners,
+// U+FEFF, variation selectors, bidi marks, ..., which HFS+ ignores) and C0/C1 controls.
+const NAME_IGNORED = /[\p{Default_Ignorable_Code_Point}\p{Cc}]/gu;
+// Windows drops trailing dots and spaces from every path segment ("node_modules." is node_modules).
+// A loop, not /[. ]+$/, which backtracks quadratically on a long run of dots not at the end.
+function dropTrailingDotsAndSpaces(s) {
+  let end = s.length;
+  while (end > 0 && (s[end - 1] === '.' || s[end - 1] === ' ')) end--;
+  return s.slice(0, end);
+}
+
+/**
+ * The form of a file or folder name that FORBIDDEN_NAMES is matched against (#210): ignorable and
+ * control code points removed, NFKC-normalised, case-folded (foldCase: upper- then lower-case, so
+ * U+212A KELVIN SIGN becomes "k" and U+017F LONG S becomes "s"), normalised again (folding can
+ * un-normalise) and trailing dots and spaces dropped. This is NFKC_Casefold in spirit, so every
+ * compatibility look-alike (Kelvin sign, long s, fullwidth letters and dots, ligatures such as
+ * U+FB06 "st") meets the same pattern as its ASCII spelling. We chose this over refusing non-ASCII
+ * names outside content/, because tenant content files legitimately have non-ASCII names
+ * (Swedish letters in a menu file name), and it fails closed: isForbiddenName also tests the raw
+ * name, so a name can only match more, never less. Not covered, on purpose: cross-script
+ * confusables (U+0430 CYRILLIC SMALL A for "a") are different names on every filesystem and to
+ * every package manager, so no tool opens them as a dependency file.
+ * @param {string} name
+ */
+export function nameKey(name) {
+  const strip = (s) => s.replace(NAME_IGNORED, '');
+  return dropTrailingDotsAndSpaces(
+    strip(foldCase(strip(name).normalize('NFKC')).normalize('NFKC')),
+  );
+}
+
+/** True when `name` (one path segment) is, or is a look-alike of, a FORBIDDEN_NAMES entry. */
+export function isForbiddenName(name) {
+  const key = nameKey(name);
+  return FORBIDDEN_NAMES.some((re) => re.test(key) || re.test(name));
+}
+
 // One path segment under assets/. Must stay identical to SEGMENT in
 // packages/schema/src/primitives/asset-ref.ts so every shipped file can be referenced by an AssetRef.
 export const ASSET_SEGMENT = /^[a-z0-9][a-z0-9._-]*$/;
@@ -324,11 +364,11 @@ export function checkTenants(root) {
       });
       continue;
     }
-    if (FORBIDDEN_NAMES.some((re) => re.test(rawName))) {
+    if (isForbiddenName(rawName)) {
       problems.push({
         path: at,
         rule: 'forbidden-file',
-        message: `"${name}" is not allowed. Tenants have no dependencies, package files or build steps; the platform provides everything.`,
+        message: `"${name}"${nameKey(rawName) === rawName ? '' : ` (read as "${safe(nameKey(rawName))}")`} is not allowed. Tenants have no dependencies, package files or build steps; the platform provides everything.`,
       });
       continue;
     }
