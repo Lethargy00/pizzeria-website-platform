@@ -338,6 +338,86 @@ test('js-url: prose with "data:" and a percent sign passes', () => {
   }
 });
 
+// #197: percent-escapes anywhere in the type, and every type a browser could act on, still fail.
+test('js-url: data: URLs with an escaped or known media type fail', () => {
+  for (const s of [
+    'data:te%78t%2Fhtml,',
+    'data:%74ext%2Fhtml,',
+    'data:%74%65%78%74%2fhtml;base64,x',
+    'data:%74ext%2Fh%74ml,x',
+    'data:x%2d%74ext/html,x',
+    '[x](data:te%78t%2Fhtml,x)',
+    '[x](data&colon;te&#37;78t%2Fhtml&comma;x)',
+    'cta: "data:te\\x2578t/html,x"', // YAML escape of "%"
+    // Every top-level type in the list, in any case.
+    ...[
+      'application/xhtml+xml',
+      'audio/mpeg',
+      'example/x',
+      'font/woff2',
+      'haptics/ivs',
+      'image/svg+xml',
+      'message/rfc822',
+      'model/gltf+json',
+      'multipart/related',
+      'text/html',
+      'video/mp4',
+      'unknown/unknown', // triggers MIME sniffing
+      '*/*', // triggers MIME sniffing
+      'x-world/x-vrml',
+      'TEXT/HTML',
+      'Application/XHTML+XML',
+      'X-Foo/bar',
+    ].flatMap((t) => [`data:${t},x`, `[x](data: ${t} ;base64,x)`]),
+  ]) {
+    assert.ok(hits(s).includes('js-url'), JSON.stringify(s));
+  }
+});
+
+test('js-url: prose with "data:" and word/word, numbers or a percent sign passes', () => {
+  for (const s of [
+    'Data: 24/7, alltid öppet',
+    'Våra data: e-post/telefon, adress',
+    'data: lunch/middag; kväll',
+    '(data: namn/adress, se villkor)',
+    'Data: 20% rabatt',
+    '10%/20%',
+    'Rabatt data: 10%/20%, gäller',
+    'Öppet data: 11/22, varje dag',
+    'data: textil/ull, bomull', // "textil" is not "text"
+    'data: mytext/html, x', // the type must be exactly a known one
+    'data: xtext/html; x',
+  ]) {
+    assert.deepEqual(hits(s), [], JSON.stringify(s));
+    assert.deepEqual(scan(s), [], JSON.stringify(s));
+  }
+});
+
+test('js-url: 1 MB adversarial media types are scanned in reasonable time', () => {
+  // Each input is about 1 MB; none has a data separator after a valid type, so none may match,
+  // except the last two, which must match.
+  const inputs = `[
+    'data:' + 'a'.repeat(1_000_000),
+    'data:' + 'a'.repeat(1_000_000) + '/x,',
+    'data:x-' + 'a'.repeat(1_000_000),
+    'data:' + 'a%7'.repeat(330_000),
+    'data:' + 'a'.repeat(500_000) + '%78' + 'a'.repeat(500_000),
+    'data:' + 'a%78'.repeat(250_000) + '%2f' + 'a'.repeat(1000),
+    'data:text/' + 'a'.repeat(1_000_000),
+    'data: 24/7, '.repeat(85_000),
+    'data:te'.repeat(140_000),
+    'data:' + 'a%78'.repeat(250_000) + '%2f' + 'a'.repeat(1000) + ',',
+    'data:x-' + 'a'.repeat(1_000_000) + '/x,',
+  ]`;
+  const start = Date.now();
+  const got = hitsInChild(inputs);
+  assert.equal(got.length, 11);
+  got.forEach((ids, i) =>
+    assert.equal(ids.includes('js-url'), i >= 9, `input ${i}: ${JSON.stringify(ids)}`),
+  );
+  assert.ok(Date.now() - start < 10_000, `took ${Date.now() - start} ms`);
+});
+
 test('hitsInChild fails with a clear message instead of hanging when a scan never ends', () => {
   // Bad fixture for the timing tests (#192): a scan that never returns must fail, not hang.
   const start = Date.now();

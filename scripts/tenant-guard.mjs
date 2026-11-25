@@ -226,12 +226,33 @@ const AUTOLINK = String.raw`(?:https|mailto|tel):[^\s<>]*>|[a-z0-9._%+-]+@[a-z0-
 const HTML_VIEWS = ['yaml'];
 // One character of a MIME type or subtype (an RFC 9110 token), as in a data: URL's media type.
 const MIME_TOKEN = "[a-z0-9!#$%&'*+.^_`|~-]";
-// The type part of a data: URL's media type: token characters without "%", or a whole "%XX"
-// escape other than "%2F" (#180). "%2F" can then only be the separator, and a lone "%" ends the
-// type ("Rabatt data: 10%/20%, x" passes). The two branches are disjoint, so there is one way to
-// match and the rule stays linear. "data:te%78t/html,x" still fails, as it did before #180.
+// The type part of a data: URL's media type (#197). Ordinary prose has the same shape
+// ("Data: 24/7, alltid öppet", "Våra data: e-post/telefon, adress"), so the type must be one a
+// browser could act on: an IANA top-level type, an "x-" type, or the types that trigger MIME
+// sniffing ("unknown", "*"). Any other type is not rendered as a document, so it is safe to pass.
+// A type with a "%XX" escape other than "%2F" fails whatever it spells (#180): an engine that
+// decoded "%2F" would decode "te%78t" to "text" too. "%2F" can then only be the separator, and a
+// lone "%" is not an escape ("Rabatt data: 10%/20%, x" passes). The token class has no "%", so
+// the branches are disjoint, there is one way to match and the rule stays linear.
 const MIME_TYPE_TOKEN = "[a-z0-9!#$&'*+.^_`|~-]";
-const MIME_TYPE_PART = String.raw`(?:${MIME_TYPE_TOKEN}|%(?!2f)[0-9a-f]{2})+`;
+const MIME_TYPE_ESCAPE = '%(?!2f)[0-9a-f]{2}';
+const MIME_TOP_LEVEL_TYPES = [
+  'application',
+  'audio',
+  'example',
+  'font',
+  'haptics',
+  'image',
+  'message',
+  'model',
+  'multipart',
+  'text',
+  'video',
+  'unknown',
+  String.raw`\*`,
+  `x-${MIME_TYPE_TOKEN}+`,
+];
+const MIME_TYPE_PART = String.raw`(?:${MIME_TOP_LEVEL_TYPES.join('|')}|${MIME_TYPE_TOKEN}*${MIME_TYPE_ESCAPE}(?:${MIME_TYPE_TOKEN}|${MIME_TYPE_ESCAPE})*)`;
 const ALL_VIEWS = ['yaml', 'decoded', 'stripped'];
 export const CONTENT_RULES = [
   {
@@ -264,7 +285,7 @@ export const CONTENT_RULES = [
     // javascript: and vbscript: fail wherever they appear (fail closed). "data:" is an ordinary
     // word ("Dina data: namn, adress") and a common YAML key, so it fails only when it is followed
     // by the shape of a data URL, data:[<type>/<subtype>][;params],<data> (#165): an optional MIME
-    // type (RFC 9110 token characters) and then ";" or ",". Ending at the first ";" or "," keeps it
+    // type (MIME_TYPE_PART, then RFC 9110 token characters) and then ";" or ",". Ending at the first ";" or "," keeps it
     // linear and catches parameters of any length or content. Whitespace around the MIME type is
     // allowed, as browsers strip it. The separators may also be percent-encoded, "%2F" for "/" and
     // "%3B" or "%2C" for ";" or "," (#180): the fetch spec does not decode them, but this is
@@ -275,7 +296,7 @@ export const CONTENT_RULES = [
       'i',
     ),
     views: ALL_VIEWS,
-    msg: 'javascript:, vbscript: and data: URLs (data:…, or data:<type>/<subtype>…, followed by ";" or ",", also with "/", ";" or "," percent-encoded as %2F, %3B or %2C) are not allowed, also not when written with character references (&#58;, &colon;, &comma;, &#x61;) or split by tabs, newlines or invisible characters. Allowed schemes: https:, mailto:, tel:. The word "data:" followed by ordinary text, or a YAML key named data, is fine.',
+    msg: 'javascript:, vbscript: and data: URLs (data:…, or data:<type>/<subtype>… with a media type such as text/html or image/svg+xml, followed by ";" or ",", also with "/", ";" or "," percent-encoded as %2F, %3B or %2C) are not allowed, also not when written with character references (&#58;, &colon;, &comma;, &#x61;) or split by tabs, newlines or invisible characters. Allowed schemes: https:, mailto:, tel:. The word "data:" followed by ordinary text (also "24/7," or "e-post/telefon,"), or a YAML key named data, is fine.',
   },
   {
     id: 'insecure-url',
