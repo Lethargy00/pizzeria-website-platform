@@ -229,16 +229,17 @@ test('/// <reference types> needs the package or its @types package declared', (
 });
 
 test('URL, unknown-scheme, absolute and "#" alias specifiers fail; astro: needs astro', () => {
-  for (const spec of [
-    'https://cdn.example.com/x.js',
-    'data:text/javascript,export default 1',
-    'file:///etc/passwd',
-    'bun:sqlite',
-    '/abs/x.js',
-    '#internal/x',
+  for (const [spec, why] of [
+    ['https://cdn.example.com/x.js', /URL or unknown-scheme/],
+    ['data:text/javascript,export default 1', /URL or unknown-scheme/],
+    ['file:///etc/passwd', /URL or unknown-scheme/],
+    ['bun:sqlite', /URL or unknown-scheme/],
+    ['/abs/x.js', /absolute path/],
+    ['#internal/x', /"imports" alias/],
   ]) {
     const p = run({ [FILE]: `import x from '${spec}';\n` });
     assert.deepEqual(ats(p), [`${FILE}:1`], spec);
+    assert.match(p[0].message, why, spec);
   }
   const astro = "---\nimport { Image } from 'astro:assets';\n---\n";
   const file = 'packages/ui/src/X.astro';
