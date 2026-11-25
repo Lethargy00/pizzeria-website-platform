@@ -338,6 +338,16 @@ test('js-url: prose with "data:" and a percent sign passes', () => {
   }
 });
 
+test('hitsInChild fails with a clear message instead of hanging when a scan never ends', () => {
+  // Bad fixture for the timing tests (#192): a scan that never returns must fail, not hang.
+  const start = Date.now();
+  assert.throws(
+    () => hitsInChild('(() => { for (;;); })()', 500),
+    /within 500 ms \(possible ReDoS\)/,
+  );
+  assert.ok(Date.now() - start < 5000, `took ${Date.now() - start} ms`);
+});
+
 test('js-url: a long percent-encoded media type is scanned in reasonable time', () => {
   // Each input is about 400-600 KB with no data separator, so none of them may match.
   const inputs = `[
@@ -386,9 +396,9 @@ test('js-url: javascript: and vbscript: still fail closed, also in prose', () =>
 });
 
 test('js-url: a long run of "data:" with whitespace is scanned in reasonable time', () => {
-  const big = `data:${' '.repeat(50)}`.repeat(18_000);
   const start = Date.now();
-  assert.ok(!hits(big).includes('js-url'));
+  const [ids] = hitsInChild("[`data:${' '.repeat(50)}`.repeat(18_000)]", 3000);
+  assert.ok(!ids.includes('js-url'), JSON.stringify(ids));
   assert.ok(Date.now() - start < 3000, `took ${Date.now() - start} ms`);
 });
 
@@ -430,8 +440,8 @@ test('normalizeForScan decodes references and maps back to source indexes', () =
 });
 
 test('a large text file is scanned in reasonable time', () => {
-  const big = '&#58;<https://example.com/x> '.repeat(30_000);
   const start = Date.now();
-  hits(big);
+  const got = hitsInChild("['&#58;<https://example.com/x> '.repeat(30_000)]", 3000);
+  assert.equal(got.length, 1);
   assert.ok(Date.now() - start < 3000, `took ${Date.now() - start} ms`);
 });
