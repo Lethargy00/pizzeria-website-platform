@@ -219,6 +219,69 @@ describe('singleLineText (#157)', () => {
   });
 });
 
+describe('singleLineText blank look-alikes, unassigned and combining marks (#194)', () => {
+  const Line = singleLineText(20);
+
+  it('allows up to four combining marks in a row and rejects the fifth', () => {
+    expect(Line.safeParse(`a${'\u0301'.repeat(4)}`).success).toBe(true);
+    expect(Line.safeParse(`a${'\u0301'.repeat(4)}b${'\u0301'.repeat(4)}`).success).toBe(true);
+    expect(Line.safeParse(`a${'\u0301'.repeat(5)}`).success).toBe(false);
+  });
+
+  it('rejects all 66 noncharacters with one invalid_format issue each', () => {
+    const noncharacters = [
+      ...Array.from({ length: 32 }, (_, i) => 0xfdd0 + i),
+      ...Array.from({ length: 17 }, (_, plane) => [
+        plane * 0x10000 + 0xfffe,
+        plane * 0x10000 + 0xffff,
+      ]).flat(),
+    ];
+    expect(noncharacters).toHaveLength(66);
+    for (const cp of noncharacters) {
+      expect(Line.safeParse(`a${String.fromCodePoint(cp)}b`).error?.issues).toEqual([
+        expect.objectContaining({ code: 'invalid_format', format: 'regex', path: [] }),
+      ]);
+    }
+  });
+
+  it('accepts the code points next to the noncharacter ranges', () => {
+    // U+FDCF and U+FDF0 are assigned Arabic symbols; U+FFFD is the replacement character.
+    expect(Line.safeParse('a\ufdcfb').success).toBe(true);
+    expect(Line.safeParse('a\ufdf0b').success).toBe(true);
+    expect(Line.safeParse('a\ufffdb').success).toBe(true);
+  });
+
+  // A quadratic rule would need about 1e12 steps here, so 2 s still tells linear from not.
+  const LONG = 1_000_000;
+  it.each([
+    ['only combining marks', '\u0301'.repeat(LONG)],
+    [
+      'runs of four marks, then a fifth at the end',
+      `${`a${'\u0301'.repeat(4)}`.repeat(LONG / 5)}\u0301`,
+    ],
+    [
+      'runs of four marks between spaces, then U+FFFF',
+      `${`${'\u0301'.repeat(4)} `.repeat(LONG / 5)}a\uffff`,
+    ],
+    ['only Hangul fillers', '\u3164'.repeat(LONG)],
+    ['only Braille blanks', '\u2800'.repeat(LONG)],
+    ['words, then a noncharacter at the end', `${'a '.repeat(LONG / 2)}\uffff`],
+    ['words, then a private-use character at the end', `${'a '.repeat(LONG / 2)}\ue000`],
+    ['marks then spaces, no visible character', `${'\u0301'.repeat(4)}${' '.repeat(LONG)}`],
+  ])('is linear on 1e6 characters of %s', (_, value) => {
+    const start = Date.now();
+    expect(singleLineText(2 * LONG).safeParse(value).success).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('is linear on 1e6 characters of valid text with many short mark runs', () => {
+    const start = Date.now();
+    const value = `${'a\u0301\u0301\u0301\u0301 '.repeat(LONG / 6)}x`;
+    expect(singleLineText(2 * LONG).safeParse(value).success).toBe(true);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+});
+
 describe('strictObject', () => {
   const Schema = strictObject({
     name: z.string(),

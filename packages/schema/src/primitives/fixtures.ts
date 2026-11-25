@@ -476,7 +476,7 @@ export const isoDateTimeFixtures: Fixtures = {
 };
 
 /**
- * For `singleLineText` (#157): one value per character class the rule rejects, each with a
+ * For `singleLineText` (#157, #194): one value per character class the rule rejects, each with a
  * readable label. Every entry must give exactly one `invalid_format` issue, in the primitive and
  * in every field built on it (page title and description, location name, street, city).
  */
@@ -518,6 +518,35 @@ export const SINGLE_LINE_TEXT_UNSAFE: readonly (readonly [label: string, value: 
   ['zero-width characters only', '​‌‍⁠'],
   ['bidi override only', '‮'],
   ['combining mark only', '́'],
+  // #194: blank look-alikes, alone and after a word.
+  ['Hangul filler U+3164 only', '\u3164'],
+  ['Hangul choseong filler U+115F only', '\u115f'],
+  ['Hangul jungseong filler U+1160 only', '\u1160'],
+  ['halfwidth Hangul filler U+FFA0 only', '\uffa0'],
+  ['Braille blank U+2800 only', '\u2800'],
+  ['Braille blanks only', '\u2800'.repeat(20)],
+  ['object replacement U+FFFC only', '\ufffc'],
+  ['Hangul filler after a word', 'Roma\u3164'],
+  ['Braille blank inside', 'Ro\u2800ma'],
+  // #194: private use, unassigned and noncharacters.
+  ['private use U+E000', 'a\ue000b'],
+  ['private use U+F8FF', 'a\uf8ffb'],
+  ['supplementary private use U+F0000', 'a\u{f0000}b'],
+  ['supplementary private use U+10FFFD', 'a\u{10fffd}b'],
+  ['unassigned U+0378', 'a\u0378b'],
+  ['unassigned U+E0080', 'a\u{e0080}b'],
+  ['noncharacter U+FDD0', 'a\ufdd0b'],
+  ['noncharacter U+FDEF', 'a\ufdefb'],
+  ['noncharacter U+FFFE', 'a\ufffeb'],
+  ['noncharacter U+FFFF', 'a\uffffb'],
+  ['noncharacter U+1FFFE', 'a\u{1fffe}b'],
+  ['noncharacter U+10FFFF', 'a\u{10ffff}b'],
+  // #194: more than four combining marks or variation selectors in a row.
+  ['five combining acutes', 'a\u0301\u0301\u0301\u0301\u0301'],
+  ['five mixed combining marks', 'a\u0300\u0301\u0302\u0303\u0304'],
+  ['Zalgo text', `Ro${'\u0336\u0335\u0334'.repeat(3)}ma`],
+  ['five variation selectors', 'a\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f'],
+  ['five enclosing keycaps', '1\u20e3\u20e3\u20e3\u20e3\u20e3'],
 ];
 
 /** For `singleLineText(20)`. */
@@ -539,6 +568,18 @@ export const singleLineTextFixtures: Fixtures = {
     'Rock’n’roll',
     'x'.repeat(20),
     ` ${'x'.repeat(20)} `,
+    // #194: what the tighter rule must still accept.
+    'Phở bò',
+    'Tiếng Việt',
+    'a\u0301\u0301\u0301\u0301',
+    '1\ufe0f\u20e3 #\ufe0f\u20e3',
+    '\ud83c\uddf8\ud83c\uddea',
+    '\ud83d\udc4d\ud83c\udffd',
+    '\u2764\ufe0f \u2615\ufe0f',
+    '\uc11c\uc6b8 \ud53c\uc790',
+    '\u6771\u4eac\u30d4\u30b6',
+    '\u0645\u0637\u0639\u0645',
+    '\ufffd',
   ],
   invalid: [
     ...NOT_STRINGS,
