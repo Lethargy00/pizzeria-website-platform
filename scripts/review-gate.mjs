@@ -3,6 +3,7 @@
 // review matrix and fails if a required approved:<role> label is missing.
 // The signed APPROVED comment is checked by the Orchestrator (one shared account, Q10.6).
 import { Buffer } from 'node:buffer';
+import { posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { matchesAny } from './lib/glob.mjs';
 
@@ -98,8 +99,12 @@ export const DEPENDENCY_FIELDS = [
   'publishConfig',
 ];
 
-/** Install-time lifecycle scripts: pnpm install runs these, so they count as dependency changes. */
+/**
+ * Install-time lifecycle scripts: pnpm install runs these, so they count as dependency changes.
+ * #176 added pnpm:devPreinstall, which pnpm runs from the root manifest before installing.
+ */
 export const INSTALL_SCRIPTS = [
+  'pnpm:devPreinstall',
   'preinstall',
   'install',
   'postinstall',
@@ -177,6 +182,16 @@ function compareDependencyFields(baseText, headText) {
   const hs = head.scripts ?? {};
   if (typeof bs !== 'object' || typeof hs !== 'object') diff.push('scripts');
   else diff.push(...INSTALL_SCRIPTS.filter((k) => !same(bs[k], hs[k])).map((k) => `scripts.${k}`));
+  // #176: pnpm passes every manifest field to an install script as npm_package_* environment
+  // variables, so while either side declares one, any change to the manifest is a dependency change.
+  if (!diff.length && !same(base, head)) {
+    const declared = INSTALL_SCRIPTS.filter((k) => Object.hasOwn(bs, k) || Object.hasOwn(hs, k));
+    if (declared.length)
+      return {
+        changed: true,
+        why: `declares install script ${declared.map((k) => `scripts.${k}`).join(', ')}, so any change counts`,
+      };
+  }
   return diff.length
     ? { changed: true, why: `changed: ${diff.join(', ')}` }
     : { changed: false, why: 'no dependency field changed' };
@@ -205,9 +220,12 @@ export const MATRIX = [
     why: 'dependency change (also link an approved type:dependency issue)',
     // #93: a packages/*/package.json is skipped only when the gate has PROVEN that none of its
     // DEPENDENCY_FIELDS changed (ctx.noDependencyChange). Without that proof it matches, as before.
+    // #176: so is any path under a directory that an install script runs code from
+    // (ctx.installScriptDirs, from installScriptCoverage).
     when: (f, _labels, ctx = {}) =>
       reviewed(f, DEPENDENCY_PATHS) ||
-      (reviewed(f, [PACKAGE_MANIFESTS]) && !ctx.noDependencyChange?.has(f)),
+      (reviewed(f, [PACKAGE_MANIFESTS]) && !ctx.noDependencyChange?.has(f)) ||
+      coveredByInstallScript(f, ctx.installScriptDirs),
   },
   {
     id: 'security',
@@ -234,8 +252,10 @@ export const MATRIX = [
  * @returns {{ required: Map<string,string[]>, missing: {label:string, reasons:string[]}[], blocking: boolean }}
  * @param {string[]} files changed paths
  * @param {string[]} labels PR labels
- * @param {{ noDependencyChange?: Set<string> }} [ctx] manifests proven free of dependency
- *   changes (see manifestProofs). Leave it out and every manifest counts as a dependency change.
+ * @param {{ noDependencyChange?: Set<string>, installScriptDirs?: string[] }} [ctx]
+ *   noDependencyChange: manifests proven free of dependency changes (see manifestProofs). Leave
+ *   it out and every manifest counts as a dependency change. installScriptDirs: directories an
+ *   install script runs code from (see installScriptCoverage); the CLI always passes it.
  */
 export function evaluate(files, labels, ctx = {}) {
   const required = new Map();
@@ -294,17 +314,17 @@ export function assertNotTruncated(kind, count, cap) {
   }
 }
 
-export async function prFilesAndLabels(repo, pr) {
+export async function prFilesAndLabels(repo, pr, api = gh) {
   const files = [];
   const apiFiles = [];
   for (let page = 1; ; page++) {
-    const batch = await gh(`repos/${repo}/pulls/${pr}/files?per_page=100&page=${page}`);
+    const batch = await api(`repos/${repo}/pulls/${pr}/files?per_page=100&page=${page}`);
     apiFiles.push(...batch);
     files.push(...changedPaths(batch));
     if (batch.length < 100) break;
   }
   assertNotTruncated('files', apiFiles.length, FILES_CAP);
-  const issue = await gh(`repos/${repo}/issues/${pr}`);
+  const issue = await api(`repos/${repo}/issues/${pr}`);
   return { files, apiFiles, labels: issue.labels.map((l) => l.name), body: issue.body ?? '' };
 }
 
@@ -392,6 +412,187 @@ export async function manifestProofs(repo, pr, apiFiles, api = gh) {
 }
 
 /**
+ * #176: which paths change what pnpm install runs, beyond the manifests and the lockfile.
+ *
+ * A manifest that declares an INSTALL_SCRIPTS entry, or has a binding.gyp beside it (pnpm then
+ * runs `node-gyp rebuild` itself), runs code from its own directory, and pnpm hands the script
+ * every manifest field as npm_package_* variables. An entry file also imports its neighbours,
+ * so the gate covers directories, not single files:
+ *  - the manifest's directory (for the root manifest, that is every path);
+ *  - the directory holding each path a script names (`node ../../tools/setup.mjs` covers tools/).
+ * Every changed path under a covered directory needs the dependency row.
+ *
+ * Every manifest in the repo is read (not only the workspace globs), at the merge base, at the
+ * base branch tip (an install script that landed on main after the PR branched still counts)
+ * and at the PR head, from the git trees and blobs by sha. Fails closed to [''] (every path):
+ * a truncated tree, any fetch or decode problem, a symlinked or unparsable manifest, a
+ * package.yaml or package.json5 (the gate cannot parse them), a script that is not a string,
+ * a symlink under a covered directory (it can point anywhere), or a script the gate cannot
+ * resolve (see scriptTargetDirs: any program other than node or node-gyp, so `pnpm run x`,
+ * `pnpm -r`, `--filter`, npx and workspace bins all fail closed; shell expansion, quotes,
+ * inline code, a package specifier, an absolute path or one that leaves the repo).
+ * Not followed: what the entry file imports from outside the covered directories, and the
+ * `<!(...)` command expansions and `sources` of a binding.gyp (docs/SECURITY.md). Never throws.
+ * @param {(path: string) => Promise<any>} api GitHub REST GET (injected for tests)
+ * @returns {Promise<{ dirs: string[], notes: string[] }>} lowercased directories, '' = every path
+ */
+export async function installScriptCoverage(repo, pr, api = gh) {
+  try {
+    return await scanInstallScripts(repo, pr, api);
+  } catch (e) {
+    return { dirs: [''], notes: [`install scripts: every path counts (${e?.message ?? e})`] };
+  }
+}
+
+const SHA = /^[0-9a-f]{40}$/;
+const MANIFEST = /(^|\/)package\.(json|yaml|json5)$/i;
+const ALT_MANIFEST = /(^|\/)package\.(yaml|json5)$/i;
+const BINDING_GYP = /(^|\/)binding\.gyp$/i;
+/**
+ * Characters of a script word the gate can resolve; anything else fails closed. No `@` (a
+ * scoped package specifier such as `-r @pwp/core` loads another workspace package), no `:`
+ * (data:, file: and node: URLs), no quotes, `$`, globs, `~` or backslashes.
+ */
+const PLAIN_WORD = /^[A-Za-z0-9._/+=-]*$/;
+/**
+ * Words after which the gate can no longer tell what runs: inline code in any short-option
+ * group holding e, p, c or C (-e, -pe, -ec, -lc, -C) or --eval / --print, and anything that
+ * moves the working directory (cd, pushd, --prefix, --dir, --cwd), since later relative paths
+ * would then resolve somewhere else.
+ */
+const OPAQUE_WORD = /^(cd|pushd|-[A-Za-z]*[epcC][A-Za-z]*|--(eval|print|prefix|dir|cwd)(=.*)?)$/;
+/**
+ * The only programs a command in an install script may start with. Anything else can run
+ * code the gate does not see: `pnpm run x` / `npm run x` / `pnpm x` (another script),
+ * `pnpm -r`, `--filter` (other packages' scripts), npx / pnpx / dlx, sh -c, a workspace bin.
+ */
+const PROGRAMS = new Set(['node', 'node-gyp']);
+const dirOf = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
+
+/**
+ * Directories (repo-relative) holding the paths an install script command names, for a
+ * manifest in `dir` ('' for the root). Each command (split at ;, &&, ||, |, &, parentheses
+ * and newlines) must start with a PROGRAMS entry. After it, a bare word (`rebuild`,
+ * `setup.mjs`, `tsx`) names no path outside `dir`: it is an option, a file in the covered
+ * manifest directory, or an unscoped dependency name, which the lockfile already covers
+ * (workspace packages are scoped, and `@` fails closed). Throws when a command cannot be
+ * resolved, so the caller fails closed.
+ */
+export function scriptTargetDirs(dir, command) {
+  if (typeof command !== 'string') throw new Error('a script is not a string');
+  const out = new Set();
+  for (const segment of command.split(/&&|\|\||[;|&()\n]/)) {
+    const words = segment.split(/[\s<>]+/).filter(Boolean);
+    if (!words.length) continue;
+    if (!PROGRAMS.has(words[0]))
+      throw new Error(
+        `cannot resolve script program ${JSON.stringify(words[0])} (only node and node-gyp)`,
+      );
+    for (const word of words.slice(1)) {
+      if (!PLAIN_WORD.test(word) || OPAQUE_WORD.test(word))
+        throw new Error(`cannot resolve script word ${JSON.stringify(word)}`);
+      for (const piece of word.split('=')) {
+        if (!piece.includes('/') && !piece.startsWith('.')) continue;
+        if (piece.startsWith('/')) throw new Error(`absolute path ${piece} in a script`);
+        const p = posix.normalize(posix.join(dir || '.', piece)).replace(/\/+$/, '');
+        if (p === '..' || p.startsWith('../'))
+          throw new Error(`script path ${piece} leaves the repo`);
+        out.add(p === '.' ? '' : dirOf(p));
+      }
+    }
+  }
+  return [...out];
+}
+
+/** Is `f` under one of `dirs` (lowercased, '' = every path)? Case-insensitive, like #162. */
+export function coveredByInstallScript(f, dirs) {
+  if (!Array.isArray(dirs) || !dirs.length) return false;
+  const p = String(f).toLowerCase();
+  return dirs.some((d) => d === '' || p === d || p.startsWith(`${d}/`));
+}
+
+async function scanInstallScripts(repo, pr, api) {
+  const notes = [];
+  const pull = await api(`repos/${repo}/pulls/${pr}`);
+  const head = pull?.head?.sha;
+  const baseRef = pull?.base?.ref;
+  const cmp = await api(`repos/${repo}/compare/${pull?.base?.sha}...${head}?per_page=1`);
+  const mergeBase = cmp?.merge_base_commit?.sha;
+  if (!SHA.test(String(head)) || !SHA.test(String(mergeBase)))
+    throw new Error('merge base or head commit unknown');
+  if (typeof baseRef !== 'string' || !baseRef) throw new Error('base branch unknown');
+  const ref = await api(
+    `repos/${repo}/git/ref/heads/${baseRef.split('/').map(encodeURIComponent).join('/')}`,
+  );
+  const tip = ref?.object?.sha;
+  if (ref?.object?.type !== 'commit' || !SHA.test(String(tip)))
+    throw new Error('base branch tip unknown');
+
+  const manifests = new Map(); // path -> Set of blob shas seen at any of the commits
+  const dirs = new Set();
+  const gyps = new Set(); // binding.gyp paths, noted once
+  const symlinks = new Set(); // symlink paths at any of the commits
+  for (const commit of new Set([mergeBase, tip, head])) {
+    const c = await api(`repos/${repo}/git/commits/${commit}`);
+    const treeSha = c?.tree?.sha;
+    if (!SHA.test(String(treeSha))) throw new Error(`tree of ${commit} unknown`);
+    const tree = await api(`repos/${repo}/git/trees/${treeSha}?recursive=1`);
+    if (tree?.truncated !== false || !Array.isArray(tree.tree))
+      throw new Error(`tree of ${commit} truncated or unreadable`);
+    for (const e of tree.tree) {
+      const path = e?.path;
+      if (typeof path !== 'string' || e.type !== 'blob') continue;
+      if (e.mode === '120000') symlinks.add(path);
+      if (BINDING_GYP.test(path) && !gyps.has(path)) {
+        gyps.add(path);
+        dirs.add(dirOf(path));
+        notes.push(`${path}: pnpm runs node-gyp, ${dirOf(path) || 'every path'} counts`);
+      }
+      if (!MANIFEST.test(path)) continue;
+      if (ALT_MANIFEST.test(path)) throw new Error(`${path} cannot be parsed`);
+      if (e.mode === '120000') throw new Error(`${path} is a symlink`);
+      if (!SHA.test(String(e.sha))) throw new Error(`${path} has no blob sha`);
+      if (!manifests.has(path)) manifests.set(path, new Set());
+      manifests.get(path).add(e.sha);
+    }
+  }
+
+  const texts = new Map(); // blob sha -> text
+  for (const [path, shas] of manifests) {
+    const dir = dirOf(path);
+    for (const sha of shas) {
+      if (!texts.has(sha)) {
+        const b = await api(`repos/${repo}/git/blobs/${sha}`);
+        if (b?.sha !== sha || b.encoding !== 'base64' || typeof b.content !== 'string')
+          throw new Error(`${path}: blob ${sha.slice(0, 7)} unreadable`);
+        texts.set(sha, Buffer.from(b.content, 'base64').toString('utf8'));
+      }
+      let m;
+      try {
+        m = parseObject(texts.get(sha).replace(/^\uFEFF/, ''));
+      } catch (e) {
+        throw new Error(`${path}: unparsable (${e.message})`);
+      }
+      const scripts = m.scripts ?? {};
+      if (typeof scripts !== 'object' || Array.isArray(scripts))
+        throw new Error(`${path}: scripts is not an object`);
+      const declared = INSTALL_SCRIPTS.filter((k) => Object.hasOwn(scripts, k));
+      if (!declared.length) continue;
+      dirs.add(dir);
+      for (const k of declared) for (const d of scriptTargetDirs(dir, scripts[k])) dirs.add(d);
+      notes.push(`${path}: declares ${declared.join(', ')}, ${dir || 'every path'} counts`);
+    }
+  }
+  const lower = [...new Set([...dirs].map((d) => d.toLowerCase()))].sort();
+  const result = lower.includes('') ? [''] : lower;
+  // A symlink under a covered directory can make the install code read any file in the repo.
+  for (const l of symlinks)
+    if (coveredByInstallScript(l, result))
+      throw new Error(`${l} is a symlink under a covered directory`);
+  return { dirs: result, notes };
+}
+
+/**
  * The PR author and its commits, straight from the pulls API (never the body or labels).
  * Used by touches-guard to recognise genuine Dependabot PRs.
  */
@@ -418,6 +619,39 @@ export async function prAuthorAndCommits(repo, pr) {
   return { user: { login: u.login, type: u.type, id: u.id }, commits };
 }
 
+/**
+ * The whole gate for one PR, as the CLI runs it: files and labels, the manifest proofs, the
+ * install-script coverage (#176), then evaluate(). Exported so a test can drive it end to end
+ * with a fake API and prove every input reaches evaluate().
+ * @param {(path: string) => Promise<any>} [api] GitHub REST GET
+ * @param {{ log?: (s: string) => void, error?: (s: string) => void }} [out]
+ * @returns {Promise<number>} the exit code: 0 when every required approval is present
+ */
+export async function runGate(
+  repo,
+  pr,
+  api = gh,
+  { log = console.log, error = console.error } = {},
+) {
+  let files, apiFiles, labels;
+  try {
+    ({ files, apiFiles, labels } = await prFilesAndLabels(repo, pr, api));
+  } catch (e) {
+    error(e.message);
+    return 1;
+  }
+  const { noDependencyChange, notes } = await manifestProofs(repo, pr, apiFiles, api);
+  const install = await installScriptCoverage(repo, pr, api);
+  for (const n of [...notes, ...install.notes]) log(`· ${n}`);
+  const r = evaluate(files, labels, { noDependencyChange, installScriptDirs: install.dirs });
+  for (const [a, reasons] of r.required)
+    log(`${labels.includes(a) ? '✓' : '✗'} ${a}\n    ${reasons.join('\n    ')}`);
+  if (r.blocking) error('\n✗ security:blocking is set. Only the Security Reviewer can lift it.');
+  if (r.missing.length || r.blocking) return 1;
+  log('\nreview-gate: OK');
+  return 0;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repo = process.env.GITHUB_REPOSITORY;
   const pr = process.argv[2] ?? process.env.PR_NUMBER;
@@ -425,20 +659,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error('usage: GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=… review-gate <pr-number>');
     process.exit(2);
   }
-  let files, apiFiles, labels;
-  try {
-    ({ files, apiFiles, labels } = await prFilesAndLabels(repo, pr));
-  } catch (e) {
-    console.error(e.message);
-    process.exit(1);
-  }
-  const { noDependencyChange, notes } = await manifestProofs(repo, pr, apiFiles);
-  for (const n of notes) console.log(`· ${n}`);
-  const r = evaluate(files, labels, { noDependencyChange });
-  for (const [a, reasons] of r.required)
-    console.log(`${labels.includes(a) ? '✓' : '✗'} ${a}\n    ${reasons.join('\n    ')}`);
-  if (r.blocking)
-    console.error('\n✗ security:blocking is set. Only the Security Reviewer can lift it.');
-  if (r.missing.length || r.blocking) process.exit(1);
-  console.log('\nreview-gate: OK');
+  process.exitCode = await runGate(repo, pr);
 }
