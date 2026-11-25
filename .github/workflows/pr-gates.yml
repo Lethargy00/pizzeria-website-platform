@@ -27,7 +27,7 @@ jobs:
             scripts
             .nvmrc
           sparse-checkout-cone-mode: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version-file: base-gate/.nvmrc }
       - name: review-gate (base copy)
         working-directory: base-gate
@@ -49,7 +49,7 @@ jobs:
             scripts
             .nvmrc
           sparse-checkout-cone-mode: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version-file: base-gate/.nvmrc }
       - name: touches-guard (base copy)
         working-directory: base-gate
