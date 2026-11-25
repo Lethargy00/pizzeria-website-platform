@@ -386,3 +386,45 @@ test('evaluateTouches: commented-out wide Touches cannot widen the issue', async
     delete issues[60];
   }
 });
+
+// ---- review fixes (qa-64 on PR #230) ----
+
+test('a fence inside a list item ends with the item, so a later Closes is seen', () => {
+  assert.deepEqual(nums('Closes #1\n\n- item\n  ```\nCloses #2\n```'), [1, 2]);
+  assert.deepEqual(nums('Closes #1\n\n1. item\n   ```\nCloses #2\n```'), [1, 2]);
+  assert.equal(closedIssue('Closes #1\n\n- item\n  ```\nCloses #2\n```'), null);
+  // Lines indented enough stay in the item's fence, and a blank line does not end it.
+  assert.deepEqual(nums('Closes #1\n\n- item\n  ```\n  Closes #2\n\n  Fixes #3\n  ```'), [1]);
+  // A fence at the left margin is not tied to the list item and runs on.
+  assert.deepEqual(nums('Closes #1\n\n- item\n\n```\nCloses #2\n```'), [1]);
+});
+
+test('a comment block inside a list item ends with the item too', () => {
+  assert.deepEqual(nums('Closes #1\n\n- item\n  <!--\nCloses #2\n-->'), [1, 2]);
+  assert.deepEqual(nums('Closes #1\n\n- item\n  <!--\n  Closes #2\n  -->'), [1]);
+});
+
+test('Touches: a fence inside a list item keeps hiding (fewer globs)', () => {
+  assert.deepEqual(T('- item\n  ```\n- `**`\n  ```\n- `b`\n'), ['a', 'b']);
+});
+
+test('only spaces and tabs make a blank line (NBSP, VT, FF and em space are text)', () => {
+  for (const ws of ['\u00a0', '\u000b', '\u000c', '\u2003']) {
+    const name = JSON.stringify(ws);
+    // Paragraph continuation: the 4-space line is text, not indented code.
+    assert.deepEqual(nums(`Closes #1\npara\n${ws}\n    Closes #2`), [1, 2], name);
+    // Still one HTML block: its text is raw HTML, which is shown.
+    assert.deepEqual(nums(`<div>\n${ws}\n\`\`\`\nCloses #2\n\`\`\`\n</div>`), [2], name);
+    assert.deepEqual(nums(`<div>\n${ws}\n> Closes #2\n</div>`), [2], name);
+    // Touches: the item is raw HTML inside the block, not a list item.
+    assert.deepEqual(
+      parseTouches(`## Touches\n- \`a\`\n<div>\n${ws}\n- \`**\`\n</div>`),
+      ['a'],
+      name,
+    );
+    // Nor does such a line end a quote: it is a lazy continuation line.
+    assert.deepEqual(nums(`> quote\n${ws}\nCloses #2`), [], name);
+  }
+  // Real blank lines (spaces, tabs) still separate blocks.
+  assert.deepEqual(nums('Closes #1\npara\n \t\n    Closes #2'), [1]);
+});
