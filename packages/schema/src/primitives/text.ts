@@ -63,25 +63,79 @@ const NOT_IN_A_LINE = String.raw`\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Co}\p{Cn}${NON
 const VISIBLE = String.raw`\p{L}\p{N}\p{P}\p{S}`;
 
 /**
- * The longest run of combining marks (`\p{M}`: accents, variation selectors, enclosing keycap)
- * allowed in a row. Real text needs one to three (Vietnamese stacks two, a keycap emoji has a
- * variation selector and U+20E3); longer runs are "Zalgo" text that draws over neighbouring
- * lines (#194).
+ * Marks and symbols that render as nothing even after a visible character, so `Roma` followed by
+ * one of them looks exactly like `Roma` but is a different value (#207). Rejected anywhere in the
+ * value, listed by value so the rule does not depend on the engine's Unicode version:
+ *
+ * - U+034F combining grapheme joiner (CGJ);
+ * - U+17B4 and U+17B5, the Khmer inherent vowels, which Unicode says not to use;
+ * - U+1D159 musical symbol null notehead (a symbol, `\p{So}`, not a mark, but it draws nothing);
+ * - U+16FE4 Khitan small script filler.
  */
-const MAX_COMBINING_MARK_RUN = 4;
+const INVISIBLE_MARKS = String.raw`\u{034F}\u{17B4}\u{17B5}\u{1D159}\u{16FE4}`;
 
 /**
- * Empty (left to `.min(1)`), or only allowed characters with at least one visible one, and no run
- * of more than `MAX_COMBINING_MARK_RUN` combining marks. Empty is accepted here on purpose so
- * that a blank value gets one `too_small` issue and not a second `invalid_format` one.
+ * Variation selectors in a place where they change nothing a reader can see (#207). An emoji
+ * variation selector, U+FE0E (text style) or U+FE0F (emoji style), is allowed only right after an
+ * emoji base (`\p{Emoji}`: a red heart, a hot beverage, the copyright sign). After a keycap
+ * base (the digits, `#` and `*`, which are `\p{Emoji}` too) only U+FE0F is allowed, and only when
+ * U+20E3 follows, as in the keycap `1` + U+FE0F + U+20E3. Anywhere else they are rejected, and
+ * so are the other selectors (U+FE00 to U+FE0D and the ideographic selectors U+E0100 to U+E01EF)
+ * everywhere. The Mongolian free variation selectors U+180B to U+180D and U+180F are
+ * allowed only right after a Mongolian character, the only script they apply to.
  *
- * The blank look-alikes are letters and symbols, so the visible character is "visible and not in
- * `NOT_IN_A_LINE`". Both parts stay linear on long input: the first look-ahead tries a fixed-length
- * run of marks at each position once, and the part before the first visible character excludes
- * visible characters, so there is only one way to match the rest. One regex (not two) keeps it to one issue per value.
+ * Each alternative looks at most one character back and one ahead, so it stays linear.
+ */
+const MISPLACED_SELECTOR =
+  String.raw`[\u{FE00}-\u{FE0D}\u{E0100}-\u{E01EF}]` +
+  String.raw`|(?<!\p{Emoji})[\u{FE0E}\u{FE0F}]` +
+  String.raw`|(?<=[0-9#*])(?:\u{FE0E}|\u{FE0F}(?!\u{20E3}))` +
+  String.raw`|(?<!\p{Script=Mongolian})[\u{180B}-\u{180D}\u{180F}]`;
+
+/**
+ * The longest run of nonspacing or enclosing marks (`\p{Mn}`, `\p{Me}`: accents, vowel signs drawn
+ * above or below, viramas, enclosing keycap) allowed in a row. These stack on one base character,
+ * so long runs are "Zalgo" text that draws over neighbouring lines (#194). Real text stays within
+ * four: Vietnamese stacks two, Thai two, Tibetan stacks up to three or four subjoined letters and
+ * vowels, and a keycap emoji has a variation selector and U+20E3.
+ *
+ * Spacing marks (`\p{Mc}`) do not count: they take up width like a letter, so they cannot pile
+ * up over other lines. Burmese needs this: the word for "hope", U+1019 U+103B U+103E U+1031
+ * U+102C U+103A, is one letter and five marks, three of them spacing (#207).
+ */
+const MAX_STACKED_MARK_RUN = 4;
+
+/**
+ * Patterns that make a value unsafe wherever they appear: a run of more than
+ * `MAX_STACKED_MARK_RUN` stacking marks, an invisible mark, or a misplaced variation selector.
+ * Every alternative has a bounded length, so `[\s\S]*` before it backtracks once per position and
+ * the check stays linear. Kept as one string so other one-line text rules can reuse it (#188).
+ */
+const UNSAFE_ANYWHERE =
+  String.raw`[\p{Mn}\p{Me}]{${MAX_STACKED_MARK_RUN + 1}}` +
+  `|[${INVISIBLE_MARKS}]` +
+  `|${MISPLACED_SELECTOR}`;
+
+/**
+ * The whole character rule of `singleLineText` in one regex, in two parts:
+ *
+ * 1. A look-ahead at the start that fails if any `UNSAFE_ANYWHERE` pattern occurs anywhere in
+ *    the value (a long run of stacking marks, an invisible mark, a misplaced variation selector).
+ * 2. The body: either the empty string, or characters none of which is in `NOT_IN_A_LINE`, with
+ *    at least one in `VISIBLE`. The blank look-alikes and U+1D159 are letters or symbols, so the
+ *    required visible character is one in `VISIBLE` and not in `NOT_IN_A_LINE`.
+ *
+ * Empty passes on purpose, so a blank value gets one `too_small` issue from `.min(1)` and not a
+ * second `invalid_format` one. Both parts are in one regex so that a value breaking several
+ * character rules still gets exactly one `invalid_format` issue.
+ *
+ * Both parts are linear in the length of the value. The look-ahead runs once, from the start,
+ * and its `[\s\S]*` backtracks over each position once, trying only patterns of bounded length
+ * there. In the body, the run before the first visible character cannot contain a visible
+ * character, so there is exactly one way to split the value and no backtracking between parts.
  */
 const SINGLE_LINE = new RegExp(
-  `^(?![\\s\\S]*\\p{M}{${MAX_COMBINING_MARK_RUN + 1}})` +
+  `^(?![\\s\\S]*(?:${UNSAFE_ANYWHERE}))` +
     `(?:[^${NOT_IN_A_LINE}${VISIBLE}]*(?![${NOT_IN_A_LINE}])[${VISIBLE}][^${NOT_IN_A_LINE}]*)?$`,
   'u',
 );
@@ -102,7 +156,13 @@ const SINGLE_LINE = new RegExp(
  *   character added in a newer Unicode version than the server's is rejected until it upgrades;
  * - no blank look-alikes: Hangul fillers (U+115F, U+1160, U+3164, U+FFA0), Braille blank U+2800
  *   and U+FFFC, anywhere in the value (#194);
- * - no more than `MAX_COMBINING_MARK_RUN` (4) combining marks or variation selectors in a row;
+ * - no more than `MAX_STACKED_MARK_RUN` (4) nonspacing or enclosing marks in a row; spacing marks
+ *   such as the Burmese and Devanagari vowel signs do not count (#207);
+ * - no invisible marks (CGJ U+034F, Khmer U+17B4 and U+17B5, U+1D159, U+16FE4), anywhere (#207);
+ * - variation selectors only where they change what a reader sees: U+FE0E or U+FE0F after an emoji
+ *   base, U+FE0F in a keycap (`1` + U+FE0F + U+20E3), Mongolian selectors after a Mongolian
+ *   character (#207). This also rejects ideographic variation sequences (a CJK character followed
+ *   by U+E0100 to U+E01EF) and the standardized sequences with U+FE00 to U+FE0D;
  * - at least one visible character (a letter, digit, punctuation mark or symbol).
  *
  * One mistake gives one issue: a non-string is `invalid_type`, a blank value `too_small`, a long
