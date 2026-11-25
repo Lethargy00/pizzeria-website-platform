@@ -282,6 +282,100 @@ describe('singleLineText blank look-alikes, unassigned and combining marks (#194
   });
 });
 
+describe('singleLineText invisible marks and variation selectors (#207)', () => {
+  const Line = singleLineText(20);
+
+  it('accepts real Burmese words with five marks on one letter', () => {
+    // The word for "hope": one letter, three spacing marks (Mc) and two nonspacing ones (Mn).
+    const hope = '\u1019\u103b\u103e\u1031\u102c\u103a';
+    expect(Line.parse(hope)).toBe(hope);
+    expect(Line.safeParse(`${hope}\u101c\u1004\u1037\u103a`).success).toBe(true);
+  });
+
+  it('counts only nonspacing and enclosing marks toward the run limit', () => {
+    // Four Mn, then a spacing mark (Mc), then four Mn again: two runs of four.
+    expect(
+      Line.safeParse('\u0915\u0941\u0941\u0941\u0941\u093e\u0941\u0941\u0941\u0941').success,
+    ).toBe(true);
+    expect(Line.safeParse(`a${'\u1031'.repeat(8)}`).success).toBe(true);
+    expect(Line.safeParse(`a${'\u0301'.repeat(5)}`).success).toBe(false);
+    expect(Line.safeParse(`a${'\u20dd'.repeat(5)}`).success).toBe(false);
+  });
+
+  it.each([
+    ['CGJ U+034F', 0x034f],
+    ['Khmer U+17B4', 0x17b4],
+    ['Khmer U+17B5', 0x17b5],
+    ['null notehead U+1D159', 0x1d159],
+    ['Khitan filler U+16FE4', 0x16fe4],
+  ])('rejects %s after, inside, before and without a word', (_, cp) => {
+    const mark = String.fromCodePoint(cp);
+    for (const value of [`Roma${mark}`, `Ro${mark}ma`, `${mark}Roma`, mark]) {
+      expect(Line.safeParse(value).error?.issues).toEqual([
+        expect.objectContaining({ code: 'invalid_format', format: 'regex', path: [] }),
+      ]);
+    }
+  });
+
+  it('rejects every variation selector after a plain word', () => {
+    const selectors = [
+      ...Array.from({ length: 16 }, (_, i) => 0xfe00 + i),
+      ...Array.from({ length: 240 }, (_, i) => 0xe0100 + i),
+    ];
+    for (const cp of selectors) {
+      expect(Line.safeParse(`Roma${String.fromCodePoint(cp)}`).success).toBe(false);
+    }
+  });
+
+  it('accepts U+FE0E and U+FE0F only after an emoji base, and U+FE0F only in a keycap', () => {
+    expect(Line.safeParse('\u2764\ufe0f').success).toBe(true);
+    expect(Line.safeParse('\u2764\ufe0e').success).toBe(true);
+    expect(Line.safeParse('\u2615\ufe0f').success).toBe(true);
+    expect(Line.safeParse('\u{1f355}\ufe0f').success).toBe(true);
+    expect(Line.safeParse('1\ufe0f\u20e3').success).toBe(true);
+    expect(Line.safeParse('1\u20e3').success).toBe(true);
+    expect(Line.safeParse('1\ufe0f').success).toBe(false);
+    expect(Line.safeParse('1\ufe0e\u20e3').success).toBe(false);
+    expect(Line.safeParse('\u2764\ufe00').success).toBe(false);
+    expect(Line.safeParse('\u2764\ufe0f\ufe0f').success).toBe(false);
+  });
+
+  it('accepts Mongolian free variation selectors only after a Mongolian character', () => {
+    expect(Line.safeParse('\u1820\u180b\u1821').success).toBe(true);
+    expect(Line.safeParse('\u1820\u180f').success).toBe(true);
+    expect(Line.safeParse('a\u180b').success).toBe(false);
+    expect(Line.safeParse('\u180b\u1820').success).toBe(false);
+  });
+
+  const LONG = 1_000_000;
+  it.each([
+    ['words, then a CGJ at the end', `${'a '.repeat(LONG / 2)}\u034f`],
+    ['words, then U+1D159 at the end', `${'a '.repeat(LONG / 2)}\u{1d159}`],
+    ['only Khmer U+17B4', '\u17b4'.repeat(LONG)],
+    ['only VS16', '\ufe0f'.repeat(LONG)],
+    ['digits with VS16 and no keycap', '1\ufe0f'.repeat(LONG / 2)],
+    ['emoji with VS16, then a VS1 at the end', `${'\u2764\ufe0f'.repeat(LONG / 2)}\ufe00`],
+    [
+      'Burmese, then five marks at the end',
+      `${'\u1019\u103b\u103e\u1031\u102c\u103a'.repeat(LONG / 6)}a${'\u0301'.repeat(5)}`,
+    ],
+  ])('is linear on 1e6 characters of %s', (_, value) => {
+    const start = Date.now();
+    expect(singleLineText(2 * LONG).safeParse(value).success).toBe(false);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it.each([
+    ['emoji with VS16', '\u2764\ufe0f '.repeat(LONG / 3)],
+    ['keycaps', '1\ufe0f\u20e3'.repeat(LONG / 3)],
+    ['Burmese words', '\u1019\u103b\u103e\u1031\u102c\u103a '.repeat(LONG / 7)],
+  ])('is linear on 1e6 characters of valid %s', (_, value) => {
+    const start = Date.now();
+    expect(singleLineText(2 * LONG).safeParse(value).success).toBe(true);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+});
+
 describe('strictObject', () => {
   const Schema = strictObject({
     name: z.string(),
