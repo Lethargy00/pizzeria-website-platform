@@ -23,7 +23,8 @@
     "check-licenses": "node scripts/check-licenses.mjs",
     "review-gate": "node scripts/review-gate.mjs",
     "touches-guard": "node scripts/touches-guard.mjs",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:scripts && pnpm tenant-guard && pnpm check-boundaries"
+    "check-path-aliases": "node scripts/check-path-aliases.mjs",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:scripts && pnpm tenant-guard && pnpm check-boundaries && pnpm check-path-aliases"
   },
   "devDependencies": {
     "@eslint/js": "9.30.0",
