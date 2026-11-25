@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out gate scripts from the PR's base commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base-gate
@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out gate scripts from the PR's base commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base-gate
