@@ -181,7 +181,8 @@ test('Closes inside an HTML comment is ignored (one line, many lines, mid-line)'
   assert.equal(closedIssue('<!--\nTemplate: Closes #51\n-->\nCloses #50'), 50);
   assert.equal(closedIssue('   <!-- a\nCloses #51 --> \nCloses #50'), 50);
   assert.equal(closedIssue('Closes #50 <!-- Closes #51 -->'), 50);
-  assert.equal(closedIssue('- note <!-- Closes #51 -->\n\nCloses #50'), 50);
+  // After a list item the body is read raw (latch), so the comment no longer hides #51.
+  assert.equal(closedIssue('- note <!-- Closes #51 -->\n\nCloses #50'), null);
 });
 
 test('text after the end of a comment block is shown', () => {
@@ -227,7 +228,8 @@ test('a comment-only Closes means no Closes at all', async () => {
 test('only a paragraph continues a quote lazily', () => {
   assert.deepEqual(nums('> quote\nCloses #51'), []);
   assert.deepEqual(nums('> quote\n    Closes #51'), []); // indented paragraph continuation
-  assert.deepEqual(nums('> - item\nCloses #51'), []); // the item's paragraph continues
+  // A list item inside the quote latches raw reading: over-counted, which fails closed.
+  assert.deepEqual(nums('> - item\nCloses #51'), [51]);
 });
 
 test('a line that could interrupt a paragraph ends the quote', () => {
@@ -393,15 +395,15 @@ test('a fence inside a list item ends with the item, so a later Closes is seen',
   assert.deepEqual(nums('Closes #1\n\n- item\n  ```\nCloses #2\n```'), [1, 2]);
   assert.deepEqual(nums('Closes #1\n\n1. item\n   ```\nCloses #2\n```'), [1, 2]);
   assert.equal(closedIssue('Closes #1\n\n- item\n  ```\nCloses #2\n```'), null);
-  // Lines indented enough stay in the item's fence, and a blank line does not end it.
-  assert.deepEqual(nums('Closes #1\n\n- item\n  ```\n  Closes #2\n\n  Fixes #3\n  ```'), [1]);
-  // A fence at the left margin is not tied to the list item and runs on.
-  assert.deepEqual(nums('Closes #1\n\n- item\n\n```\nCloses #2\n```'), [1]);
+  // After the latch nothing hides, even text GitHub keeps in the item's fence (over-count).
+  assert.deepEqual(nums('Closes #1\n\n- item\n  ```\n  Closes #2\n\n  Fixes #3\n  ```'), [1, 2, 3]);
+  // A fence at the left margin after a list is read raw too.
+  assert.deepEqual(nums('Closes #1\n\n- item\n\n```\nCloses #2\n```'), [1, 2]);
 });
 
-test('a comment block inside a list item ends with the item too', () => {
+test('a comment block after a list item hides nothing either', () => {
   assert.deepEqual(nums('Closes #1\n\n- item\n  <!--\nCloses #2\n-->'), [1, 2]);
-  assert.deepEqual(nums('Closes #1\n\n- item\n  <!--\n  Closes #2\n  -->'), [1]);
+  assert.deepEqual(nums('Closes #1\n\n- item\n  <!--\n  Closes #2\n  -->'), [1, 2]);
 });
 
 test('Touches: a fence inside a list item keeps hiding (fewer globs)', () => {

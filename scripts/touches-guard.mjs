@@ -28,6 +28,14 @@
 // only text GitHub certainly hides (code, quotes, comments) is ignored; for Touches, anything
 // GitHub might hide is ignored.
 //
+// Raw after the first list (#208, security-46's decision on PR #230): indentation inside list
+// items and footnotes depends on a content column this guard does not track, so for Closes the
+// body is read raw from the first line that could open a list item (also inside a quote) or a
+// GFM footnote definition, or that opens a fence, comment or HTML block of types 1-5 inside an
+// HTML block ending at a blank line. From there nothing hides a reference: no fence, indented
+// code, quote, comment or inline code span; only character references are decoded. Authors:
+// after a list, mention other issues without a closing keyword ("issue #18", "see #18").
+//
 // Maintainers: "Update branch" (or any manual push) on a Dependabot PR adds a commit that is not
 // Dependabot's and breaks this check. Comment `@dependabot recreate` instead.
 import { pathToFileURL } from 'node:url';
@@ -161,6 +169,12 @@ function interruptsParagraph(line) {
   );
 }
 
+/**
+ * A line that could open a list item (also inside blockquotes) or a GFM footnote definition.
+ * Inside those, indentation is measured from a content column this guard does not track.
+ */
+const CONTAINER_LINE = /^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)|\[\^[^\]]*\]:)/;
+
 /** CommonMark blank line: only spaces and tabs (NBSP, VT, FF and other Unicode spaces are text). */
 const isBlank = (line) => /^[ \t]*$/.test(line);
 
@@ -205,7 +219,7 @@ function commentEnd(line, from, touches) {
  * Block-level scan of Markdown in one pass, so fences, HTML comments, HTML blocks, blockquotes
  * and indented code cannot hide each other (#148, #191, #208). Returns one entry per line:
  * kind `plain` (Markdown text), `html` (raw HTML: shown, but not parsed as Markdown), `hidden`
- * (code, comment or quote) or `blank`.
+ * (code, comment or quote), `blank`, or `raw` (closes mode, after the latch below).
  *
  * Mode `closes` hides only what GitHub certainly does not render as text: an extra reference
  * fails closed, a missed one would not. Mode `touches` hides everything GitHub might not render
@@ -216,28 +230,42 @@ function commentEnd(line, from, touches) {
  *   `<!--`, also mid-line and after list markers, and to the end of the body when unclosed;
  * - fences and HTML blocks after list markers (`- ```js`) are recognised only in `touches`;
  * - indented code (4+ columns) is hidden only when it cannot continue a paragraph or a list
- *   item: after a blank line (or at the start), and only before any list item has been seen.
+ *   item: after a blank line (or at the start), and only before any list item has been seen;
+ * - `closes` latches (`nested`) on the first line matching `CONTAINER_LINE`, or opening a fence,
+ *   comment or HTML block of types 1-5 inside an HTML block that ends at a blank line. That
+ *   check runs in every state. From the latch line on, every line is `raw` and the latch never
+ *   resets: inside lists and footnotes indentation is relative to a content column the scanner
+ *   does not track, and one misread construct would hide everything after it.
  */
 function scanBlocks(text, mode) {
   const touches = mode === 'touches';
   const out = [];
   const push = (t, kind) => out.push({ text: t, kind });
   const prefix = touches ? LIST_PREFIX : /^/;
-  let fence = null; // { ch, len, minIndent }
+  let fence = null; // { ch, len }
   let html = null; // { end: RegExp | null }
-  let comment = null; // { minIndent } while inside a comment block
+  let comment = false;
+  let nested = false; // closes mode: latched on the first container line (#208)
   let quote = null; // { para: boolean, noLazy: boolean }
   let inCode = false;
   let listOpen = false;
   let prevBlank = true;
   for (const line of String(text ?? '').split(/\r\n|\r|\n/)) {
     const blank = isBlank(line);
-    // Closes mode: a fence or comment block opened with indentation while a list item is open
-    // belongs to that item, and ends with it (no lazy continuation) at the first non-blank line
-    // indented less than its opening line. Touches mode keeps hiding (fewer globs).
-    const leftItem = (block) => !touches && !blank && indentWidth(line) < block.minIndent;
-    if (fence && leftItem(fence)) fence = null;
-    if (comment && leftItem(comment)) comment = null;
+    // Closes mode latch (security-46's decision on PR #230): from the first line that could open
+    // a list item or footnote, or that opens a fence, comment or HTML block of types 1-5 inside
+    // an HTML block ending at a blank line, every line is raw text. Checked in every state.
+    if (!touches && !nested) {
+      if (CONTAINER_LINE.test(line)) nested = true;
+      else if (html && html.end === null) {
+        const h2 = htmlStart(line);
+        if (fenceOpen(line) || (h2 && (h2.comment || h2.end))) nested = true;
+      }
+    }
+    if (nested) {
+      push(line, 'raw');
+      continue;
+    }
     if (fence) {
       const c = FENCE_CLOSE.exec(line);
       if (c && c[1][0] === fence.ch && c[1].length >= fence.len) fence = null;
@@ -250,7 +278,7 @@ function scanBlocks(text, mode) {
         push('', 'hidden');
         continue;
       }
-      comment = null;
+      comment = false;
       if (!e.blockEnds) html = { end: /-->/ };
       push(e.rest, 'html');
       prevBlank = false;
@@ -291,11 +319,9 @@ function scanBlocks(text, mode) {
       }
       quote = null;
     }
-    // Indentation of a block opened inside a list item (0: not tied to an item).
-    const minIndent = listOpen ? indentWidth(line) : 0;
     const f = fenceOpen(line, prefix);
     if (f) {
-      fence = { ...f, minIndent };
+      fence = f;
       inCode = false;
       prevBlank = false;
       push('', 'hidden');
@@ -309,7 +335,7 @@ function scanBlocks(text, mode) {
         const at = line.indexOf('<!--');
         const e = commentEnd(line, at + (touches ? 4 : 2), touches);
         if (!e) {
-          comment = { minIndent };
+          comment = true;
           push('', 'hidden');
           continue;
         }
@@ -344,7 +370,7 @@ function scanBlocks(text, mode) {
         kept += rest.slice(0, i);
         const e = commentEnd(rest, i + 4, true);
         if (!e) {
-          comment = { minIndent: 0 };
+          comment = true;
           rest = '';
           break;
         }
@@ -466,8 +492,13 @@ const CLOSING_REF =
  * References are read only from text GitHub renders as text: never from fenced or indented
  * code, blockquotes or HTML comments (#148, #191, #208), and never from an inline code span or
  * same-line comment, unless something in the paragraph puts that in doubt (see `inlineScan`), in
- * which case nothing in that paragraph is ignored. Each entry is `{ ref, issue }`, where `issue`
- * is the number for a plain `#n` and null for any other form.
+ * which case nothing in that paragraph is ignored. From the first line that could open a list
+ * item or footnote definition (or a fence, comment or HTML type 1-5 block inside a blank-line
+ * HTML block) to the end, the body is read raw: nothing is ignored and only character
+ * references are decoded, because indentation inside lists and footnotes depends on a content
+ * column the guard does not track. This over-counts, which fails closed: after a list, mention
+ * other issues without a closing keyword ("issue #18", "see #18"). Each entry is
+ * `{ ref, issue }`, where `issue` is the number for a plain `#n` and null for any other form.
  * @returns {{ ref: string, issue: number | null }[]}
  */
 export function closingRefs(body) {
@@ -485,7 +516,7 @@ export function closingRefs(body) {
       continue;
     }
     flush();
-    visible.push(kind === 'html' ? text : '');
+    visible.push(kind === 'html' || kind === 'raw' ? text : '');
   }
   flush();
   return [...decodeEntities(visible.join('\n')).matchAll(CLOSING_REF)].map((m) => ({
