@@ -3,6 +3,11 @@ packages:
   - playground
 # tenants/ is deliberately NOT a workspace: tenants are data only (PROMPT.md §6).
 
+# Phantom dependencies (#222): a package may load only what it declares.
+# Pinned by scripts/*.test.mjs; do not add entries without a security review.
+hoistPattern: []
+publicHoistPattern: []
+
 # Dependency build scripts are blocked unless listed here (pnpm 10 default).
 onlyBuiltDependencies: []
 
