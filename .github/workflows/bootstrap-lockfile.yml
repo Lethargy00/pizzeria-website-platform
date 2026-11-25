@@ -49,7 +49,8 @@ concurrency:
 #     LOCK_DEPRECATED lines (a plain deprecation message, which may contain a URL) are exempt
 #     from this and the quote check;
 #   - no key may appear twice in one mapping, block or {...}, compared the way YAML reads keys,
-#     and no plain key may be one YAML reads as null, a boolean, a number or a timestamp (#223:
+#     no block line may start with [ or { (a flow collection as a key), and no plain key may
+#     be one YAML reads as null, a boolean, a number or a timestamp (#223:
 #     pnpm refuses such a lockfile, so frozen installs on main would fail);
 #   - the dependency graph (#196, see the comment above the graph code in the push job): every
 #     new or changed registry version must come from a package.json specifier that changed, an
@@ -165,7 +166,7 @@ jobs:
             # them: quotes removed, '' unescaped, trailing spaces trimmed. A plain key that YAML
             # reads as null, a boolean, a number or a timestamp is refused, because its text is
             # not its key ("1.0" and "1.00" are the same key) and pnpm quotes such keys.
-            YNONSTR='^(|~|null|Null|NULL|true|True|TRUE|false|False|FALSE|[-+]?(0b[01_]+|0o[0-7_]+|0x[0-9a-fA-F_]+|[0-9][0-9_]*(\.[0-9_]*)?([eE][-+]?[0-9]+)?)|\.[0-9][0-9_]*([eE][-+]?[0-9]+)?|[-+]?\.(inf|Inf|INF)|\.(nan|NaN|NAN)|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?)$'
+            YNONSTR='^(|~|null|Null|NULL|true|True|TRUE|false|False|FALSE|[-+]?(0b[01_]+|0o[0-7_]+|0x[0-9a-fA-F_]+|[0-9][0-9_]*(\.[0-9_]*)?([eE][-+]?[0-9]+)?)|\.[0-9_]+([eE][-+]?[0-9]+)?|[-+]?\.(inf|Inf|INF)|\.(nan|NaN|NAN)|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?)$'
             # ykey TEXT (a line without its indentation): YK=1 and YKEY=its block mapping key as
             # YAML reads it (YQ=1 if quoted), or YK=0 for a line that is not a key; YVAL is the
             # value after the key, or the item after "- ", or the line itself.
@@ -299,6 +300,15 @@ jobs:
                         yc=$((yc + ${#ys} - ${#o})) ys=$o
                         ykey "$ys"
                       done
+                      # A block line that starts with [ or {, even after "- ", is a flow
+                      # collection used as a key ("[ms]: x"), which YAML turns into a string such
+                      # as "ms" or "[object Object]". pnpm writes no such line (security-45).
+                      case "$ys" in
+                        [\{\[]*) lockerr "$n" "line that starts with [ or {: YAML reads a flow collection there as a key, and pnpm writes none. Commit this lockfile change in a reviewed PR." ;;
+                      esac
+                      # Both of these only over-refuse, on lines pnpm never writes: bare "-" items
+                      # with the mapping on the next line share one path, and a quoted key with a
+                      # trailing space ('a ') is compared as a.
                       if [ "$YK" = 1 ]; then
                         if [ "$YQ" = 0 ] && [[ "$YKEY" =~ $YNONSTR ]]; then
                           lockerr "$n" "key '$YKEY': YAML reads it as null, a boolean, a number or a timestamp, and pnpm quotes such keys. Commit this lockfile change in a reviewed PR."

@@ -1934,6 +1934,40 @@ test('verify (#223): a duplicate key in a packages, snapshots or importer entry 
     lockRejected(pVerify(pairs, PBUMPED), name, re);
 });
 
+// security-45 (round 1): keys that js-yaml reads differently from their text.
+test('verify (#223): flow collections as keys and ._5 floats fail', () => {
+  const flowKey = /line that starts with \[ or \{: YAML reads a flow collection there as a key/;
+  const nonStr = (k) =>
+    new RegExp(`key '${k.replace(/[.]/g, '\\.')}': YAML reads it as null, a boolean, a number`);
+  const importers = (lines) => [...pBump(), ['\nimporters:\n\n', `\nimporters:\n\n${lines}\n`]];
+  const overrides = (lines) => [
+    ...pBump(),
+    ['\nimporters:\n', `\noverrides:\n${lines}\nimporters:\n`],
+  ];
+  const cases = {
+    // w_b9: js-yaml reads [.] as the key ".", the same as the root importer.
+    'importers: [.] next to .': [importers('  [.]: {}\n'), flowKey],
+    // x_b10: ._5 is the float 0.5, so the same key as '0.5'.
+    'importers: ._5 next to 0.5': [importers("  ._5: {}\n\n  '0.5': {}\n"), nonStr('._5')],
+    'overrides: [ms] next to ms': [overrides('  [ms]: 2.0.0\n  ms: 2.0.0\n'), flowKey],
+    "overrides: ['ms'] next to ms": [overrides("  ['ms']: 2.0.0\n  ms: 2.0.0\n"), flowKey],
+    'overrides: [ms] twice': [overrides('  [ms]: 2.0.0\n  [ms]: 2.0.1\n'), flowKey],
+    // Both are the key "[object Object]".
+    'overrides: two {...} keys': [overrides('  {a: 1}: 2.0.0\n  {b: 1}: 2.0.1\n'), flowKey],
+    'overrides: a flow key in a list item': [overrides('  - [ms]: 2.0.0\n'), flowKey],
+    'overrides: ._5 next to 0.5': [overrides("  ._5: 2.0.0\n  '0.5': 2.0.0\n"), nonStr('._5')],
+    // qa-65: a quoted flow key and a plain one are the same key.
+    "packages: {'node':x, node: y}": [
+      pFields("    engines: {'node':x, node: y}\n"),
+      /duplicate key 'node' in \{\.\.\.\}: pnpm refuses/,
+    ],
+  };
+  for (const [name, [pairs, re]] of Object.entries(cases))
+    lockRejected(pVerify(pairs, PBUMPED), name, re);
+  // qa-65: a quoted number-like flow key is a string, so it passes.
+  ok(pVerify(pFields("    engines: {'1.0': x}\n"), PBUMPED));
+});
+
 test('verify (#223): the same key in different mappings, and look-alikes, still pass', () => {
   // A comma inside a quoted value, the same key in two flow mappings and under two parents,
   // repeated sequence items, and a deprecation message that looks like a flow mapping.
