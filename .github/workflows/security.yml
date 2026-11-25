@@ -31,7 +31,7 @@ jobs:
         with: { persist-credentials: false }
       - name: Require lockfile
         run: test -f pnpm-lock.yaml || { echo "::error::pnpm-lock.yaml is missing (docs/HANDOFF.md)."; exit 1; }
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: pnpm }
       - run: pnpm install --frozen-lockfile
