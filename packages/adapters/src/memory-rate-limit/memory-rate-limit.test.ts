@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdapterError } from '../interfaces/index.js';
 import type { RateLimitKey } from '../interfaces/index.js';
-import { MAX_LIMIT, createMemoryRateLimitStore, factory } from './index.js';
+import { MAX_CLOCK_MS, MAX_LIMIT, createMemoryRateLimitStore, factory } from './index.js';
 
 const key = (scope: string, n = 1): RateLimitKey =>
   `${scope}:${n.toString(16).padStart(64, '0')}` as RateLimitKey;
@@ -249,6 +249,10 @@ describe('memory-rate-limit', () => {
       ['Infinity', Number.POSITIVE_INFINITY],
       ['-Infinity', Number.NEGATIVE_INFINITY],
       ['negative', -1],
+      ['MAX_CLOCK_MS + 1', MAX_CLOCK_MS + 1],
+      ['MAX_SAFE_INTEGER', Number.MAX_SAFE_INTEGER],
+      ['1e20 (above 2^53, #221)', 1e20],
+      ['MAX_VALUE', Number.MAX_VALUE],
     ];
     for (const [label, value] of bad) {
       it(`now() = ${label}: never allows, records nothing, fixed message, no cause`, async () => {
@@ -295,6 +299,87 @@ describe('memory-rate-limit', () => {
     it('now() = 0 is a valid time', async () => {
       const s = createMemoryRateLimitStore({ now: () => 0 });
       expect((await s.hit(key('a'), W)).allowed).toBe(true);
+    });
+
+    it('MAX_CLOCK_MS leaves room for two of the largest windows (#221)', () => {
+      expect(MAX_CLOCK_MS).toBe(Number.MAX_SAFE_INTEGER - 2 * 86_400_000);
+      expect(Number.isSafeInteger(MAX_CLOCK_MS + 2 * 86_400_000)).toBe(true);
+    });
+
+    it('now() = MAX_CLOCK_MS is still a valid time and counts exactly (#221)', async () => {
+      const s = createMemoryRateLimitStore({ now: () => MAX_CLOCK_MS, maxKeys: 1 });
+      const w = { limit: 1, windowSeconds: 86_400 };
+      expect((await s.hit(key('a'), w)).allowed).toBe(true);
+      expect(await s.hit(key('a'), w)).toMatchObject({
+        allowed: false,
+        retryAfterSeconds: 86_400,
+      });
+      // The key is live, so a sweep must not free the slot.
+      await expect(s.hit(key('b'), w)).rejects.toMatchObject({ code: 'unavailable' });
+    });
+
+    it('a clock above 2^53 cannot drop a live key or allow a second hit (#221)', async () => {
+      // On the old code, at 1e20 `t + windowMs === t`: the hit expired at once, a sweep on a
+      // full store dropped the live key, and with limit 1 a second hit was allowed.
+      let t = 1_000_000;
+      const s = createMemoryRateLimitStore({ now: () => t, maxKeys: 1 });
+      const w = { limit: 1, windowSeconds: 60 };
+      expect((await s.hit(key('a'), w)).allowed).toBe(true);
+      t = 1e20;
+      await expect(s.hit(key('b'), w)).rejects.toMatchObject({
+        code: 'unavailable',
+        message: 'rate-limit clock failure',
+      });
+      await expect(s.hit(key('a'), w)).rejects.toMatchObject({ code: 'unavailable' });
+      expect(s.size).toBe(1);
+      t = 1_000_001;
+      expect((await s.hit(key('a'), w)).allowed).toBe(false);
+    });
+  });
+
+  describe('mixed windows on one key (#221)', () => {
+    it('60 s, 60 s, 1 s, 60 s with limit 2: the last 60 s hit is blocked', async () => {
+      const c = clock();
+      const s = createMemoryRateLimitStore({ now: c.now });
+      const k = key('a');
+      const long = { limit: 2, windowSeconds: 60 };
+      const short = { limit: 2, windowSeconds: 1 };
+      expect((await s.hit(k, long)).allowed).toBe(true); // t=0
+      c.advance(10_000);
+      expect((await s.hit(k, long)).allowed).toBe(true); // t=10
+      c.advance(10_000);
+      // Only its own 1 s window counts, so this is allowed; it must not drop the 60 s hits.
+      expect((await s.hit(k, short)).allowed).toBe(true); // t=20
+      c.advance(10_000);
+      // Three hits in the last 60 s: the 60 s call is over its limit. This hit counts too, so
+      // fewer than 2 are in the window once the t=20 hit leaves, at t=80.
+      expect(await s.hit(k, long)).toMatchObject({ allowed: false, retryAfterSeconds: 50 });
+    });
+
+    it('a call with a smaller limit does not drop hits a larger limit still needs', async () => {
+      const c = clock();
+      const s = createMemoryRateLimitStore({ now: c.now });
+      const k = key('a');
+      const big = { limit: 4, windowSeconds: 60 };
+      for (let i = 0; i < 4; i++) expect((await s.hit(k, big)).allowed).toBe(true);
+      // With limit 1 only 2 hits would be kept, and the next limit 4 call would see 2, not 5.
+      expect((await s.hit(k, { limit: 1, windowSeconds: 60 })).allowed).toBe(false);
+      c.advance(1_000);
+      expect((await s.hit(k, big)).allowed).toBe(false);
+    });
+
+    it('a short-window hit keeps the key for its largest window', async () => {
+      const c = clock();
+      const s = createMemoryRateLimitStore({ now: c.now, maxKeys: 1 });
+      const k = key('a');
+      const long = { limit: 2, windowSeconds: 60 };
+      expect((await s.hit(k, long)).allowed).toBe(true); // t=0, expires at 60
+      c.advance(50_000);
+      expect((await s.hit(k, { limit: 2, windowSeconds: 1 })).allowed).toBe(true); // t=50
+      c.advance(20_000); // t=70: the t=0 hit left; the t=50 hit is live for a 60 s window
+      await expect(s.hit(key('b'), long)).rejects.toMatchObject({ code: 'unavailable' });
+      expect((await s.hit(k, long)).allowed).toBe(true); // 1 prior hit (t=50) + this one
+      expect((await s.hit(k, long)).allowed).toBe(false);
     });
   });
 
@@ -615,6 +700,33 @@ describe('memory-rate-limit', () => {
       expect((await s.hit(k, r)).allowed).toBe(true);
       expect((await s.hit(key('b'), r)).allowed).toBe(true);
       expect(s.size).toBe(2);
+    });
+
+    it('a backward step of more than a window that returns resets the counter (#221)', async () => {
+      // Documented trade-off (module doc): the store cannot tell this apart from a forward jump
+      // coming back, which the cap is for. This test pins the behaviour so a change is visible.
+      const s = createMemoryRateLimitStore();
+      const k = key('a');
+      const w3 = { limit: 3, windowSeconds: 60 };
+      const seq: boolean[] = [];
+      for (let i = 0; i < 3; i++) seq.push((await s.hit(k, w3)).allowed); // T0
+      vi.setSystemTime(T0 - 10 * DAY);
+      seq.push((await s.hit(k, w3)).allowed); // capped to T0 - 10 days + 60 s
+      vi.setSystemTime(T0 + 1);
+      for (let i = 0; i < 3; i++) seq.push((await s.hit(k, w3)).allowed);
+      expect(seq).toEqual([true, true, true, false, true, true, true]);
+      expect((await s.hit(k, w3)).allowed).toBe(false);
+    });
+
+    it('a backward step of up to one window that returns keeps the counter (#174)', async () => {
+      const s = createMemoryRateLimitStore();
+      const k = key('a');
+      const w3 = { limit: 3, windowSeconds: 60 };
+      for (let i = 0; i < 3; i++) expect((await s.hit(k, w3)).allowed).toBe(true); // T0
+      vi.setSystemTime(T0 - 60_000);
+      expect((await s.hit(k, w3)).allowed).toBe(false);
+      vi.setSystemTime(T0 + 1);
+      expect((await s.hit(k, w3)).allowed).toBe(false);
     });
 
     it('a forward jump with no return still drops expired keys', async () => {
