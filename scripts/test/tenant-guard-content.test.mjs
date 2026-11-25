@@ -368,10 +368,36 @@ test('js-url: data: URLs with an escaped or known media type fail', () => {
       'TEXT/HTML',
       'Application/XHTML+XML',
       'X-Foo/bar',
+      'x-/a', // a bare "x-" type
     ].flatMap((t) => [`data:${t},x`, `[x](data: ${t} ;base64,x)`]),
   ]) {
     assert.ok(hits(s).includes('js-url'), JSON.stringify(s));
   }
+});
+
+// #197 review: any type whose subtype ends in "+xml" is an XML MIME type (WHATWG MIME Sniffing),
+// which browsers render as XML, so SVG or XHTML scripts in it run.
+test('js-url: data: URLs with any type and a +xml subtype fail', () => {
+  for (const s of [
+    '[x](data:foo/bar+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20onload%3D%22alert(1)%22%2F%3E)',
+    '[x](data:pizza/menu%2Bxml;base64,PHN2Zz4=)',
+    // General regression: any token type, any subtype prefix, any case, encoded suffix.
+    ...['a', 'pizza', 'foo.bar', '24', 'e-post', 'lunch'].flatMap((t) => [
+      `data:${t}/x+xml,x`,
+      `data: ${t}/+xml ;base64,x`,
+      `data:${t}%2Fsvg+XML%2Cx`,
+      `data:${t}/svg%2bxml,x`,
+      `data:${t}/svg+%78%6d%6c,x`,
+      `data:${t}/a.b-c+xml;charset=utf-8,x`,
+    ]),
+    '[x](data&colon;foo/bar&plus;xml&comma;x)',
+    '[x](data:foo/bar+x&#109;l,x)',
+  ]) {
+    assert.ok(hits(s).includes('js-url'), JSON.stringify(s));
+  }
+  // Only a subtype that ends in "+xml" counts.
+  for (const s of ['data: pizza/xml+meny, x', 'data: foo/bar+xmlx, x', 'data: e-post/+json, x'])
+    assert.deepEqual(hits(s), [], JSON.stringify(s));
 });
 
 test('js-url: prose with "data:" and word/word, numbers or a percent sign passes', () => {
@@ -394,8 +420,8 @@ test('js-url: prose with "data:" and word/word, numbers or a percent sign passes
 });
 
 test('js-url: 1 MB adversarial media types are scanned in reasonable time', () => {
-  // Each input is about 1 MB; none has a data separator after a valid type, so none may match,
-  // except the last two, which must match.
+  // Each input is about 1 MB. Only the inputs in shouldMatch end in a data separator after a type
+  // the rule flags, so only those may match.
   const inputs = `[
     'data:' + 'a'.repeat(1_000_000),
     'data:' + 'a'.repeat(1_000_000) + '/x,',
@@ -408,12 +434,20 @@ test('js-url: 1 MB adversarial media types are scanned in reasonable time', () =
     'data:te'.repeat(140_000),
     'data:' + 'a%78'.repeat(250_000) + '%2f' + 'a'.repeat(1000) + ',',
     'data:x-' + 'a'.repeat(1_000_000) + '/x,',
+    'data:' + 'a'.repeat(1_000_000) + '/' + 'a+xm'.repeat(250_000),
+    'data:a/' + '+xml'.repeat(250_000),
+    'data:a/' + '+xml'.repeat(250_000) + ',',
   ]`;
   const start = Date.now();
   const got = hitsInChild(inputs);
-  assert.equal(got.length, 11);
+  const shouldMatch = [9, 10, 13];
+  assert.equal(got.length, 14);
   got.forEach((ids, i) =>
-    assert.equal(ids.includes('js-url'), i >= 9, `input ${i}: ${JSON.stringify(ids)}`),
+    assert.equal(
+      ids.includes('js-url'),
+      shouldMatch.includes(i),
+      `input ${i}: ${JSON.stringify(ids)}`,
+    ),
   );
   assert.ok(Date.now() - start < 10_000, `took ${Date.now() - start} ms`);
 });
