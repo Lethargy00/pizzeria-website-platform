@@ -48,6 +48,9 @@ concurrency:
 #     lockfile. So existing workspace link: entries stay, and a new or moved one fails.
 #     LOCK_DEPRECATED lines (a plain deprecation message, which may contain a URL) are exempt
 #     from this and the quote check;
+#   - no key may appear twice in one mapping, block or {...}, compared the way YAML reads keys,
+#     and no plain key may be one YAML reads as null, a boolean, a number or a timestamp (#223:
+#     pnpm refuses such a lockfile, so frozen installs on main would fail);
 #   - the dependency graph (#196, see the comment above the graph code in the push job): every
 #     new or changed registry version must come from a package.json specifier that changed, an
 #     existing name@version keeps its integrity, and a new npm alias must be in a package.json.
@@ -156,13 +159,100 @@ jobs:
               printf '::error file=pnpm-lock.yaml,line=%s,title=bootstrap-lockfile::%s\n' "$1" "$2"
               bad=1
             }
+            # Duplicate keys (#223). pnpm refuses a lockfile with a key twice in one mapping
+            # (ERR_PNPM_BROKEN_LOCKFILE), so a duplicate anywhere, in a block mapping or in a
+            # {...}, would break frozen installs on main. Keys are compared the way YAML reads
+            # them: quotes removed, '' unescaped, trailing spaces trimmed. A plain key that YAML
+            # reads as null, a boolean, a number or a timestamp is refused, because its text is
+            # not its key ("1.0" and "1.00" are the same key) and pnpm quotes such keys.
+            YNONSTR='^(|~|null|Null|NULL|true|True|TRUE|false|False|FALSE|[-+]?(0b[01_]+|0o[0-7_]+|0x[0-9a-fA-F_]+|[0-9][0-9_]*(\.[0-9_]*)?([eE][-+]?[0-9]+)?)|\.[0-9][0-9_]*([eE][-+]?[0-9]+)?|[-+]?\.(inf|Inf|INF)|\.(nan|NaN|NAN)|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt ].*)?)$'
+            # ykey TEXT (a line without its indentation): YK=1 and YKEY=its block mapping key as
+            # YAML reads it (YQ=1 if quoted), or YK=0 for a line that is not a key; YVAL is the
+            # value after the key, or the item after "- ", or the line itself.
+            ykey() {
+              local s=$1 i c
+              YK=0 YQ=0 YKEY= YVAL=$1
+              case "$s" in
+                '-') YVAL= ; return 0 ;;
+                '- '*) YVAL=${s#- } ; return 0 ;;
+                [\{\[]*) return 0 ;;
+                \'*)
+                  YQ=1 i=1
+                  while [ "$i" -lt "${#s}" ]; do
+                    c=${s:i:1}
+                    if [ "$c" = "'" ]; then
+                      if [ "${s:i+1:1}" != "'" ]; then break; fi
+                      i=$((i + 1))
+                    fi
+                    YKEY+=$c i=$((i + 1))
+                  done
+                  s=${s:i+1}
+                  s=${s#"${s%%[! ]*}"}
+                  case "$s" in
+                    :) YK=1 YVAL= ;;
+                    ': '*) YK=1 YVAL=${s#: } ;;
+                    *) YKEY= YQ=0 ;;
+                  esac
+                  ;;
+                *': '*) YK=1 YKEY=${s%%: *} YVAL=${s#*: } ;;
+                *:) YK=1 YKEY=${s%:} YVAL= ;;
+              esac
+              YKEY=${YKEY%"${YKEY##*[! ]}"}
+              YVAL=${YVAL#"${YVAL%%[! ]*}"}
+              return 0
+            }
+            # flowdup TEXT LINE: reports a key that is twice in one {...} of TEXT (a flow value),
+            # and a plain key in one that YAML reads as another type.
+            flowdup() {
+              local s=$1 i c nx k q=0 tq=0 tok= US=$'\x1f'
+              local -a ty=() ks=() st=()
+              for ((i = 0; i < ${#s}; i++)); do
+                c=${s:i:1}
+                if [ "$q" = 1 ]; then
+                  if [ "$c" = "'" ]; then
+                    if [ "${s:i+1:1}" = "'" ]; then tok+="'" i=$((i + 1)); else q=0; fi
+                  else
+                    tok+=$c
+                  fi
+                  continue
+                fi
+                case "$c" in
+                  "'") q=1 tq=1 ;;
+                  '{' | '[') ty+=("$c") ks+=("$US") st+=(0) tok= tq=0 ;;
+                  : | , | '}' | ']')
+                    if [ "${#ty[@]}" = 0 ]; then tok+=$c; continue; fi
+                    if [ "$c" = : ]; then
+                      nx=${s:i+1:1}
+                      if [ "${ty[-1]}" != '{' ] || [ "${st[-1]}" = 1 ]; then tok+=$c; continue; fi
+                      case "$tq$nx" in 1* | 0 | '0 ' | 0, | '0}' | '0]') ;; *) tok+=$c; continue ;; esac
+                    fi
+                    if [ "${ty[-1]}" = '{' ] && [ "${st[-1]}" = 0 ] && { [ "$c" = : ] || [ "$tq" = 1 ] || [[ "$tok" == *[!\ ]* ]]; }; then
+                      k=${tok#"${tok%%[! ]*}"}
+                      k=${k%"${k##*[! ]}"}
+                      if [ "$tq" = 0 ] && [[ "$k" =~ $YNONSTR ]]; then lockerr "$2" "key '$k' in {...}: YAML reads it as null, a boolean, a number or a timestamp, and pnpm quotes such keys. Commit this lockfile change in a reviewed PR."; fi
+                      if [[ "${ks[-1]}" == *"$US$k$US"* ]]; then lockerr "$2" "duplicate key '$k' in {...}: pnpm refuses a lockfile with a duplicated mapping key. Commit this lockfile change in a reviewed PR."; fi
+                      ks[-1]+="$k$US"
+                    fi
+                    case "$c" in
+                      :) st[-1]=1 ;;
+                      ,) st[-1]=0 ;;
+                      *) unset 'ty[-1]' 'ks[-1]' 'st[-1]' ;;
+                    esac
+                    tok= tq=0
+                    ;;
+                  *) tok+=$c ;;
+                esac
+              done
+            }
             # scan FILE OUT CHECK: writes "ancestry<RS>line" to OUT for every git, URL, file: or
             # link: line (LOCK_SPECIAL), where ancestry is the keys of the enclosing mappings, so
             # an entry that exists in the base cannot be moved to another importer or package.
-            # With CHECK=1 it also reports every line that breaks the LOCK_* form rules.
+            # With CHECK=1 it also reports every line that breaks the LOCK_* form rules and every
+            # duplicate key (#223).
             scan() {
-              local line t s n=0 ind o c IFS=$'\x1f'
-              local -a ki=() kk=()
+              local line t s n=0 ind o c p ys yc IFS=$'\x1f'
+              local -a ki=() kk=() di=() dk=()
+              local -A dseen=()
               : > "$2"
               while IFS= read -r line || [ -n "$line" ]; do
                 n=$((n + 1))
@@ -193,6 +283,38 @@ jobs:
                     o="${t//[^\']/}"
                     if [ $((${#o} % 2)) != 0 ]; then lockerr "$n" "quoted value spans lines: pnpm writes each quoted value on one line"; fi
                   fi
+                  # #223: the path of a block key is the keys of its enclosing mappings.
+                  case "$t" in
+                    '' | '#'*) ;;
+                    *)
+                      while [ "${#di[@]}" -gt 0 ] && [ "${di[-1]}" -ge "$ind" ]; do unset 'di[-1]' 'dk[-1]'; done
+                      ykey "$t"
+                      # A "- " item opens a new mapping at the column of its content, so each
+                      # item has its own path (pnpm writes no mappings in lists).
+                      ys=$t yc=$ind
+                      while [ "$YK" = 0 ] && [[ "$ys" == '- '* ]]; do
+                        o=${ys#- }
+                        o=${o#"${o%%[! ]*}"}
+                        di+=("$yc") dk+=($'\x1d'"$n")
+                        yc=$((yc + ${#ys} - ${#o})) ys=$o
+                        ykey "$ys"
+                      done
+                      if [ "$YK" = 1 ]; then
+                        if [ "$YQ" = 0 ] && [[ "$YKEY" =~ $YNONSTR ]]; then
+                          lockerr "$n" "key '$YKEY': YAML reads it as null, a boolean, a number or a timestamp, and pnpm quotes such keys. Commit this lockfile change in a reviewed PR."
+                        fi
+                        p="${dk[*]}"$'\x1f'"$YKEY"
+                        if [ -n "${dseen[$p]-}" ]; then
+                          o=${dk[*]}
+                          o=${o//$'\x1d'/the list item on line }
+                          lockerr "$n" "duplicate key $YKEY${dk[0]+ under ${o//"$IFS"/ > }}: pnpm refuses a lockfile with a duplicated mapping key. Commit this lockfile change in a reviewed PR."
+                        fi
+                        dseen[$p]=1
+                        di+=("$yc") dk+=("$YKEY")
+                      fi
+                      case "$YVAL" in [\{\[]*) flowdup "$YVAL" "$n" ;; esac
+                      ;;
+                  esac
                 fi
                 if ! [[ "$line" =~ $LOCK_DEPRECATED ]] && [[ "$s" =~ $LOCK_SPECIAL ]]; then printf '%s\x1e%s\n' "${kk[*]}" "$t" >> "$2"; fi
                 case "$t" in

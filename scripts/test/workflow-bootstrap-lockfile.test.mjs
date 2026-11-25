@@ -1837,3 +1837,164 @@ test('verify (#217): each check reports its own error, even where a later check 
     lockRejected(pVerifyOn(base, pairs, dev), name, re);
   }
 });
+
+// ---- #223 (security-40): duplicate keys, which pnpm refuses (ERR_PNPM_BROKEN_LOCKFILE) ----
+
+// pBump plus `fields` after the resolution line of the new packages entry prettier@3.6.3.
+const PRETTIER_RES = '    resolution: {integrity: sha512-BBBB==}\n';
+const pFields = (fields, deps = '') => [...pBump(deps), [PRETTIER_RES, `${PRETTIER_RES}${fields}`]];
+
+test('verify (#223): a duplicate key in a packages, snapshots or importer entry fails', () => {
+  const dup = (key, under) =>
+    new RegExp(`duplicate key ${key} under ${under.replace(/[.()]/g, '\\$&')}: pnpm refuses`);
+  const flowDup = (key) => new RegExp(`duplicate key '${key}' in \\{\\.\\.\\.\\}: pnpm refuses`);
+  const nonStr = /key '1\.00?'.*YAML reads it as null, a boolean, a number or a timestamp/;
+  const pkg = 'packages > prettier@3.6.3';
+  const cases = {
+    // security-40's fixture: a second resolution that points at another tarball.
+    'packages: two resolution lines': [
+      pFields(
+        '    resolution: {integrity: sha512-VVVV==, tarball: https://registry.npmjs.org/evil/-/evil-1.0.0.tgz}\n',
+      ),
+      dup('resolution', pkg),
+    ],
+    'packages: the same key quoted and with a space before the colon': [
+      pFields("    'hasBin': true\n    hasBin : true\n"),
+      dup('hasBin', pkg),
+    ],
+    'packages: a duplicate in a nested mapping': [
+      pFields("    peerDependencies:\n      eslint: '>=8'\n      'eslint': '>=9'\n"),
+      dup('eslint', `${pkg} > peerDependencies`),
+    ],
+    'packages: keys YAML reads as the same number': [
+      pFields("    peerDependencies:\n      1.0: '>=1'\n      1.00: '>=2'\n"),
+      nonStr,
+    ],
+    'packages: a duplicate in a flow mapping': [
+      pFields("    engines: {node: '>=18', node: '>=20'}\n"),
+      flowDup('node'),
+    ],
+    'packages: a quoted duplicate in a nested flow mapping': [
+      pFields("    peerDependenciesMeta: {eslint: {optional: true, 'optional': false}}\n"),
+      flowDup('optional'),
+    ],
+    'packages: a duplicate in a mapping in a list item': [
+      pFields('    bundledDependencies:\n      - a: 1\n      - a: 1\n        a: 2\n'),
+      /duplicate key a under packages > prettier@3\.6\.3 > bundledDependencies > the list item on line \d+: pnpm refuses/,
+    ],
+    'packages: a duplicate in a flow mapping in a list item': [
+      pFields('    bundledDependencies:\n      - {a: 1, a: 2}\n'),
+      flowDup('a'),
+    ],
+    'packages: a number key in a flow mapping': [
+      pFields('    engines: {1.0: x, 1.00: y}\n'),
+      nonStr,
+    ],
+    'snapshots: two dependencies sections': [
+      pBump('      ms: 2.0.0\n    dependencies:\n      eslint: 9.0.0\n'),
+      dup('dependencies', 'snapshots > prettier@3.6.3'),
+    ],
+    'snapshots: two optional lines': [
+      [
+        ...pBump(),
+        ['  prettier@3.6.3: {}\n', '  prettier@3.6.3:\n    optional: true\n    optional: false\n'],
+      ],
+      dup('optional', 'snapshots > prettier@3.6.3'),
+    ],
+    'snapshots: two transitivePeerDependencies lists': [
+      pBump(
+        '      ms: 2.0.0\n    transitivePeerDependencies:\n      - a\n    transitivePeerDependencies:\n      - b\n',
+      ),
+      dup('transitivePeerDependencies', 'snapshots > prettier@3.6.3'),
+    ],
+    // security-40's n5: a second devDependencies section in the same importer.
+    'importers: two devDependencies sections': [
+      [
+        ...pBump(),
+        [
+          '        specifier: 3.6.3\n        version: 3.6.3\n',
+          '        specifier: 3.6.3\n        version: 3.6.3\n\n    devDependencies:\n      plugin:\n        specifier: 2.0.0\n        version: 2.0.0(eslint@9.0.0)\n',
+        ],
+      ],
+      dup('devDependencies', 'importers > .'),
+    ],
+    'importers: a quoted duplicate version': [
+      [
+        ...pBump(),
+        ['        version: 3.6.3\n', "        version: 3.6.3\n        'version': 3.6.2\n"],
+      ],
+      dup('version', 'importers > . > devDependencies > prettier'),
+    ],
+    'overrides: a duplicate override': [
+      [...pBump(), ['\nimporters:\n', '\noverrides:\n  ms: 2.0.0\n  ms: 2.0.1\n\nimporters:\n']],
+      dup('ms', 'overrides'),
+    ],
+  };
+  for (const [name, [pairs, re]] of Object.entries(cases))
+    lockRejected(pVerify(pairs, PBUMPED), name, re);
+});
+
+test('verify (#223): the same key in different mappings, and look-alikes, still pass', () => {
+  // A comma inside a quoted value, the same key in two flow mappings and under two parents,
+  // repeated sequence items, and a deprecation message that looks like a flow mapping.
+  const fields = [
+    "    engines: {node: '>=18, <27', npm: '>=10'}",
+    '    cpu: [x64, x64]',
+    '    os: [{node: 1}, {node: 1}]',
+    '    bundledDependencies:',
+    '      - a: 1',
+    '        b: 1',
+    '      - a: 2',
+    '        b: 2',
+    '    peerDependencies:',
+    "      eslint: '>=8'",
+    "      '@types/node': '>=20'",
+    '    peerDependenciesMeta:',
+    '      eslint:',
+    '        optional: true',
+    "      '@types/node':",
+    '        optional: true',
+    '    deprecated: use {a, a} instead',
+    '',
+  ].join('\n');
+  ok(
+    pVerify(
+      pFields(
+        fields,
+        '      ms: 2.0.0\n    transitivePeerDependencies:\n      - eslint\n      - eslint\n',
+      ),
+      PBUMPED,
+    ),
+  );
+});
+
+test('verify (#223): a new scoped npm alias root (npm:@scope/fmt@1.0.0) passes', () => {
+  const scoped = (pkgs, snap) =>
+    pVerify(
+      [
+        [
+          '        specifier: 3.6.2\n        version: 3.6.2\n',
+          "        specifier: npm:@scope/fmt@1.0.0\n        version: '@scope/fmt@1.0.0'\n",
+        ],
+        ['  prettier@3.6.2:\n    resolution: {integrity: sha512-AAAA==}\n', pkgs],
+        ['  prettier@3.6.2: {}\n', snap],
+      ],
+      { ...PDEV, prettier: 'npm:@scope/fmt@1.0.0' },
+    );
+  const FMT = "  '@scope/fmt@1.0.0':\n    resolution: {integrity: sha512-GGGG==}\n";
+  // qa-58's fixture (scoped.lock), on pbase.
+  ok(scoped(FMT, "  '@scope/fmt@1.0.0': {}\n"));
+  // With a new scoped transitive dependency and an existing one.
+  ok(
+    scoped(
+      `${FMT}\n  '@scope/util@1.0.0':\n    resolution: {integrity: sha512-UUUU==}\n`,
+      "  '@scope/fmt@1.0.0':\n    dependencies:\n      '@scope/util': 1.0.0\n      ms: 2.0.0\n\n  '@scope/util@1.0.0': {}\n",
+    ),
+  );
+  // The same root with a second resolution line still fails.
+  lockRejected(
+    scoped(`${FMT}    resolution: {integrity: sha512-HHHH==}\n`, "  '@scope/fmt@1.0.0': {}\n"),
+    'scoped alias with two resolution lines',
+    /duplicate key resolution under packages > @scope\/fmt@1\.0\.0: pnpm refuses/,
+  );
+});
