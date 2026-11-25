@@ -51,13 +51,29 @@ const NONCHARACTERS =
 const BLANK_LOOKALIKES = String.raw`\u{115F}\u{1160}\u{3164}\u{FFA0}\u{2800}\u{FFFC}`;
 
 /**
- * Characters that never belong in one line of text: C0 and C1 controls (NUL, TAB, CR, LF, ESC,
- * NEL, …), format characters (zero-width space, joiners, bidi embeddings, overrides and isolates,
- * LRM/RLM, word joiner, soft hyphen, BOM), lone surrogates, the Unicode line and paragraph
- * separators U+2028 / U+2029, private-use characters (`\p{Co}`), unassigned code points
- * (`\p{Cn}`), the noncharacters and the blank look-alikes above.
+ * The C0 and C1 controls except LF: U+0000 to U+0009, U+000B to U+001F and U+007F to U+009F.
+ * Together with LF this is exactly `\p{Cc}`, a set Unicode guarantees never to change, so listing
+ * it by value changes nothing and lets the multi-line rule leave LF out (#188).
  */
-const NOT_IN_A_LINE = String.raw`\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Co}\p{Cn}${NONCHARACTERS}${BLANK_LOOKALIKES}`;
+const CONTROLS_EXCEPT_LF = String.raw`\u{0}-\u{9}\u{B}-\u{1F}\u{7F}-\u{9F}`;
+
+/**
+ * Characters that never belong in text, on one line or several (#188): C0 and C1 controls other
+ * than LF (NUL, TAB, CR, ESC, NEL, …), format characters (zero-width space, joiners, bidi
+ * embeddings, overrides and isolates, LRM/RLM, word joiner, soft hyphen, BOM, tag characters),
+ * lone surrogates, the Unicode line and paragraph separators U+2028 / U+2029, private-use
+ * characters (`\p{Co}`), unassigned code points (`\p{Cn}`), the noncharacters and the blank
+ * look-alikes above.
+ *
+ * A character-class body (no brackets), used by {@link textRuleSource}.
+ */
+const NOT_IN_TEXT = String.raw`${CONTROLS_EXCEPT_LF}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Co}\p{Cn}${NONCHARACTERS}${BLANK_LOOKALIKES}`;
+
+/**
+ * Characters that never belong in one line of text: {@link NOT_IN_TEXT} and LF, so every C0 and
+ * C1 control (`\p{Cc}`). A character-class body, used by {@link textRuleSource}.
+ */
+const NOT_IN_A_LINE = String.raw`\n${NOT_IN_TEXT}`;
 
 /** A character a reader can see: a letter, a digit, punctuation or a symbol (emoji included). */
 const VISIBLE = String.raw`\p{L}\p{N}\p{P}\p{S}`;
@@ -109,7 +125,7 @@ const MAX_STACKED_MARK_RUN = 4;
  * Patterns that make a value unsafe wherever they appear: a run of more than
  * `MAX_STACKED_MARK_RUN` stacking marks, an invisible mark, or a misplaced variation selector.
  * Every alternative has a bounded length, so `[\s\S]*` before it backtracks once per position and
- * the check stays linear. Kept as one string so other one-line text rules can reuse it (#188).
+ * the check stays linear. Shared by the one-line and the multi-line rule (#188).
  */
 const UNSAFE_ANYWHERE =
   String.raw`[\p{Mn}\p{Me}]{${MAX_STACKED_MARK_RUN + 1}}` +
@@ -117,13 +133,13 @@ const UNSAFE_ANYWHERE =
   `|${MISPLACED_SELECTOR}`;
 
 /**
- * The whole character rule of `singleLineText` in one regex, in two parts:
+ * The source of a whole character rule in one regex, for the `u` flag, in two parts:
  *
  * 1. A look-ahead at the start that fails if any `UNSAFE_ANYWHERE` pattern occurs anywhere in
  *    the value (a long run of stacking marks, an invisible mark, a misplaced variation selector).
- * 2. The body: either the empty string, or characters none of which is in `NOT_IN_A_LINE`, with
- *    at least one in `VISIBLE`. The blank look-alikes and U+1D159 are letters or symbols, so the
- *    required visible character is one in `VISIBLE` and not in `NOT_IN_A_LINE`.
+ * 2. The body: either the empty string, or characters none of which is in `notAllowed`, with at
+ *    least one in `VISIBLE`. The blank look-alikes and U+1D159 are letters or symbols, so the
+ *    required visible character is one in `VISIBLE` and not in `notAllowed`.
  *
  * Empty passes on purpose, so a blank value gets one `too_small` issue from `.min(1)` and not a
  * second `invalid_format` one. Both parts are in one regex so that a value breaking several
@@ -133,12 +149,26 @@ const UNSAFE_ANYWHERE =
  * and its `[\s\S]*` backtracks over each position once, trying only patterns of bounded length
  * there. In the body, the run before the first visible character cannot contain a visible
  * character, so there is exactly one way to split the value and no backtracking between parts.
+ *
+ * `lines: 'single'` uses {@link NOT_IN_A_LINE} (`singleLineText`); `lines: 'multi'` uses
+ * {@link NOT_IN_TEXT}, which allows LF (`LocalizedText`, #188). `UNSAFE_ANYWHERE` works for both:
+ * LF is not an emoji base or a Mongolian character, so a variation selector right after a line
+ * break is still rejected, and LF is not a mark, so a line break ends a mark run.
+ *
+ * Returns the pattern string, not a compiled `RegExp`, so every caller compiles its own (with the
+ * `u` flag) and no `lastIndex` state is ever shared. Internal to `@pwp/schema`: exported for the
+ * other primitives (#188), not from `primitives/index.ts`.
  */
-const SINGLE_LINE = new RegExp(
-  `^(?![\\s\\S]*(?:${UNSAFE_ANYWHERE}))` +
-    `(?:[^${NOT_IN_A_LINE}${VISIBLE}]*(?![${NOT_IN_A_LINE}])[${VISIBLE}][^${NOT_IN_A_LINE}]*)?$`,
-  'u',
-);
+export function textRuleSource(lines: 'single' | 'multi'): string {
+  const notAllowed = lines === 'single' ? NOT_IN_A_LINE : NOT_IN_TEXT;
+  return (
+    `^(?![\\s\\S]*(?:${UNSAFE_ANYWHERE}))` +
+    `(?:[^${notAllowed}${VISIBLE}]*(?![${notAllowed}])[${VISIBLE}][^${notAllowed}]*)?$`
+  );
+}
+
+/** The character rule of {@link singleLineText}. */
+const SINGLE_LINE = new RegExp(textRuleSource('single'), 'u');
 
 /**
  * One line of plain text a visitor sees, e.g. a page title, a location name or a street (#157).
@@ -168,6 +198,15 @@ const SINGLE_LINE = new RegExp(
  * One mistake gives one issue: a non-string is `invalid_type`, a blank value `too_small`, a long
  * one `too_big`, and any character rule above a single `invalid_format` (format `regex`, no
  * `pwpCode`: this is a built-in Zod issue, not a `custom` one, #23).
+ *
+ * Joiners are rejected on purpose (#188). U+200D (ZWJ) and U+200C (ZWNJ) are invisible, so
+ * `Ro` + U+200D + `ma` looks exactly like `Roma` but is a different value, and allowing them
+ * safely needs a rule that depends on context: ZWJ only between two emoji, joiners only between
+ * two letters of a script that uses them. The cost is that ZWJ emoji (the cook, the family, the
+ * rainbow flag) and the tag-sequence flags are rejected, and so is text in a script that needs
+ * joiners (Persian, some Indic spellings). The platform supports `sv` and `en` (DECISIONS #3),
+ * which need neither. Changing this takes a `type:contract` change to this rule and to
+ * `LocalizedText`, which share it, never an override in one field.
  */
 export function singleLineText(max: number) {
   return z.string().trim().min(1).max(max).regex(SINGLE_LINE);

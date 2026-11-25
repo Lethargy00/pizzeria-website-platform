@@ -476,12 +476,12 @@ export const isoDateTimeFixtures: Fixtures = {
 };
 
 /**
- * For `singleLineText` (#157, #194): one value per character class the rule rejects, each with a
- * readable label. Every entry must give exactly one `invalid_format` issue, in the primitive and
- * in every field built on it (page title and description, location name, street, city).
+ * For `singleLineText` and `LocalizedText` (#157, #194, #188): one value per character class
+ * that no text may contain, on one line or several, each with a readable label. Every entry must
+ * give exactly one `invalid_format` issue, in both primitives and in every field built on them.
+ * `SINGLE_LINE_TEXT_UNSAFE` adds the line feed, which only `LocalizedText` allows.
  */
-export const SINGLE_LINE_TEXT_UNSAFE: readonly (readonly [label: string, value: string])[] = [
-  ['LF', 'a\nb'],
+export const TEXT_UNSAFE: readonly (readonly [label: string, value: string])[] = [
   ['CR LF', 'a\r\nb'],
   ['CR', 'a\rb'],
   ['TAB', 'a\tb'],
@@ -580,6 +580,24 @@ export const SINGLE_LINE_TEXT_UNSAFE: readonly (readonly [label: string, value: 
   ['Mongolian FVS1 U+180B after a word', 'Roma\u180b'],
   ['Mongolian FVS4 U+180F after a word', 'Roma\u180f'],
   ['Mongolian FVS1 U+180B only', '\u180b'],
+  // #188: ZWJ emoji and tag-sequence flags are rejected (joiners and tags are format characters).
+  ['ZWJ emoji (cook)', 'Kock \u{1f9d1}\u200d\u{1f373}'],
+  ['ZWJ emoji (family)', '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}'],
+  [
+    'tag-sequence flag (England)',
+    '\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}',
+  ],
+];
+
+/**
+ * For `singleLineText` (#157, #194): {@link TEXT_UNSAFE} and the line feed. Every entry must give
+ * exactly one `invalid_format` issue, in the primitive and in every field built on it (page title
+ * and description, location name, street, city).
+ */
+export const SINGLE_LINE_TEXT_UNSAFE: readonly (readonly [label: string, value: string])[] = [
+  ['LF', 'a\nb'],
+  ['LF between lines of a sentence', 'Pizza\nmed ost'],
+  ...TEXT_UNSAFE,
 ];
 
 /** For `singleLineText(20)`. */
@@ -641,5 +659,48 @@ export const singleLineTextFixtures: Fixtures = {
     '\n',
     'x'.repeat(21),
     ...SINGLE_LINE_TEXT_UNSAFE.map(([, value]) => value),
+  ],
+};
+
+/**
+ * For `LocalizedText` (#188): the multi-line rule. Valid values may contain LF; invalid ones
+ * break a rule that only matters across lines. {@link TEXT_UNSAFE} holds the rest.
+ */
+export const LOCALIZED_TEXT_UNSAFE: readonly (readonly [label: string, value: string])[] = [
+  ['VS16 U+FE0F right after a line break', '\u2764\n\ufe0f'],
+  ['five combining marks right after a line break', `a\n${'\u0301'.repeat(5)}`],
+  ['a line break, then a zero-width space only', '\n\u200b'],
+  ['line separator U+2028 between lines', 'Rad ett\u2028Rad tv\u00e5'],
+  ['CR line breaks', 'Rad ett\rRad tv\u00e5'],
+  ['TAB indentation', 'Rad ett\n\tRad tv\u00e5'],
+  ['blank look-alikes on every line', '\u3164\n\u2800\n\u3164'],
+];
+
+/** For `LocalizedText` (#188), used alone and in `localizedStringFor`. */
+export const localizedTextFixtures: Fixtures = {
+  valid: [
+    'Meny',
+    'Rad ett\nRad tv\u00e5',
+    'Stycke ett.\n\nStycke tv\u00e5.',
+    '  Meny\n  ',
+    '\n\nMeny\n\n',
+    ' \n \n x',
+    'Pizza \u2764\ufe0f\n\u{1f355}',
+    `a${'\u0301'.repeat(4)}\nb${'\u0301'.repeat(4)}`,
+    '1\ufe0f\u20e3\n#\ufe0f\u20e3',
+    '\u{1f1f8}\u{1f1ea}\n\u{1f44d}\u{1f3fd}',
+    '\u1019\u103b\u103e\u1031\u102c\u103a\n\u0915\u094d\u0937',
+    'x'.repeat(2000),
+    `${'x\n'.repeat(999)}x`,
+  ],
+  invalid: [
+    ...NOT_STRINGS,
+    '',
+    ' ',
+    '\n',
+    '\n\n\n',
+    'x'.repeat(2001),
+    ...TEXT_UNSAFE.map(([, value]) => value),
+    ...LOCALIZED_TEXT_UNSAFE.map(([, value]) => value),
   ],
 };

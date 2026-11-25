@@ -11,6 +11,8 @@ import {
   MAX_ISO_DATE_TIME_LENGTH,
   LocaleCode,
   LocalizedString,
+  LocalizedText,
+  MAX_LOCALIZED_TEXT_LENGTH,
   PhoneNumber,
   PriceSEK,
   SafeUrl,
@@ -34,16 +36,20 @@ import {
   localizedStringAnyFixtures,
   localizedStringSvEnFixtures,
   localizedStringSvFixtures,
+  LOCALIZED_TEXT_UNSAFE,
+  localizedTextFixtures,
   phoneNumberFixtures,
   priceSEKFixtures,
   safeUrlFixtures,
   SINGLE_LINE_TEXT_UNSAFE,
   singleLineTextFixtures,
   slugFixtures,
+  TEXT_UNSAFE,
   timeOfDayFixtures,
   weekdayFixtures,
   type Fixtures,
 } from './fixtures.js';
+import { localizedLineFor } from './locale.js';
 import * as hours from '../hours/index.js';
 import * as menu from '../menu/index.js';
 import * as root from '../index.js';
@@ -373,6 +379,192 @@ describe('singleLineText invisible marks and variation selectors (#207)', () => 
     const start = Date.now();
     expect(singleLineText(2 * LONG).safeParse(value).success).toBe(true);
     expect(Date.now() - start).toBeLessThan(2000);
+  });
+});
+
+table('LocalizedText', LocalizedText, localizedTextFixtures);
+
+describe('LocalizedText character rules (#188)', () => {
+  const formatIssue = expect.objectContaining({
+    code: 'invalid_format',
+    format: 'regex',
+    path: [],
+  });
+  const two = 'Rad ett\nRad tv\u00e5';
+
+  it('keeps line feeds inside the text and trims the ends', () => {
+    expect(LocalizedText.parse(two)).toBe(two);
+    expect(LocalizedText.parse('\n  Stycke ett.\n\nStycke tv\u00e5.\n ')).toBe(
+      'Stycke ett.\n\nStycke tv\u00e5.',
+    );
+  });
+
+  it.each([...TEXT_UNSAFE, ...LOCALIZED_TEXT_UNSAFE].map(([name, value]) => [name, value]))(
+    'raises exactly one invalid_format issue for %s',
+    (_, value) => {
+      expect(LocalizedText.safeParse(value).error?.issues).toEqual([formatIssue]);
+    },
+  );
+
+  it('rejects every C0 and C1 control except LF, with one issue each', () => {
+    const controls = Array.from({ length: 0xa0 }, (_, cp) => cp).filter((cp) =>
+      /\p{Cc}/u.test(String.fromCodePoint(cp)),
+    );
+    // \p{Cc} is fixed by Unicode: U+0000 to U+001F and U+007F to U+009F.
+    expect(controls).toHaveLength(65);
+    for (const cp of controls) {
+      const value = `a${String.fromCodePoint(cp)}b`;
+      if (cp === 0x0a) {
+        expect(LocalizedText.safeParse(value).success).toBe(true);
+      } else {
+        expect(LocalizedText.safeParse(value).error?.issues, `U+${cp.toString(16)}`).toEqual([
+          formatIssue,
+        ]);
+      }
+      expect(singleLineText(20).safeParse(value).error?.issues).toEqual([formatIssue]);
+    }
+  });
+
+  it.each([
+    ['empty', ''],
+    ['spaces only', '   '],
+    ['line feeds only (trimmed away)', '\n\n'],
+    ['spaces and line feeds only', ' \n \n '],
+  ])('raises exactly one too_small issue for %s', (_, value) => {
+    expect(LocalizedText.safeParse(value).error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_small', minimum: 1, path: [] }),
+    ]);
+  });
+
+  it('raises exactly one too_big issue for a long but clean value', () => {
+    expect(LocalizedText.safeParse('x\n'.repeat(1001)).error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_big', maximum: MAX_LOCALIZED_TEXT_LENGTH, path: [] }),
+    ]);
+  });
+
+  it('raises exactly one invalid_type issue for a non-string', () => {
+    expect(LocalizedText.safeParse(42).error?.issues).toEqual([
+      expect.objectContaining({ code: 'invalid_type', expected: 'string', path: [] }),
+    ]);
+  });
+
+  it('ends a run of marks at a line break, and rejects a selector right after one', () => {
+    const marks = (n: number) => '\u0301'.repeat(n);
+    expect(LocalizedText.safeParse(`a${marks(4)}\nb${marks(4)}`).success).toBe(true);
+    expect(LocalizedText.safeParse(`a${marks(5)}\nb`).success).toBe(false);
+    expect(LocalizedText.safeParse('\u2764\ufe0f\n\u2615\ufe0f').success).toBe(true);
+    expect(LocalizedText.safeParse('\u2764\n\ufe0f').success).toBe(false);
+    expect(LocalizedText.safeParse('\u1820\n\u180b').success).toBe(false);
+  });
+
+  it('rejects ZWJ emoji and tag-sequence flags, and accepts single emoji', () => {
+    // The #188 trade-off: joiners and tag characters are rejected in every text rule.
+    for (const value of [
+      'Kock \u{1f9d1}\u200d\u{1f373}',
+      '\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}',
+    ]) {
+      expect(LocalizedText.safeParse(value).error?.issues).toEqual([formatIssue]);
+      expect(singleLineText(20).safeParse(value).error?.issues).toEqual([formatIssue]);
+    }
+    expect(LocalizedText.safeParse('Kock \u{1f9d1} \u{1f373} \u{1f355}').success).toBe(true);
+  });
+
+  // A quadratic rule would need about 1e12 steps here, so 2 s still tells linear from not. The
+  // length limit does not stop the regex from running, so long input must stay linear too.
+  const LONG = 1_000_000;
+  it.each([
+    ['lines, then a NUL at the end', `${'a\n'.repeat(LONG / 2)}\u0000`],
+    ['only line feeds, then a zero-width space', `${'\n'.repeat(LONG)}\u200bx`],
+    [
+      'lines of four marks, then a fifth at the end',
+      `${`a${'\u0301'.repeat(4)}\n`.repeat(LONG / 6)}a${'\u0301'.repeat(5)}`,
+    ],
+    ['only line feeds and blank look-alikes', '\u3164\n'.repeat(LONG / 2)],
+    ['emoji lines, then a misplaced selector', `${'\u2764\ufe0f\n'.repeat(LONG / 3)}\ufe0f`],
+  ])('is linear on 1e6 characters of %s', (_, value) => {
+    const start = Date.now();
+    expect(LocalizedText.safeParse(value).error?.issues).toContainEqual(formatIssue);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('applies to every translation of a localized string, with one issue at its path', () => {
+    const SvEn = localizedStringFor(['sv', 'en']);
+    expect(SvEn.parse({ sv: two, en: 'Line one\nLine two' })).toEqual({
+      sv: two,
+      en: 'Line one\nLine two',
+    });
+    for (const [, value] of TEXT_UNSAFE) {
+      expect(SvEn.safeParse({ sv: 'Meny', en: value }).error?.issues).toEqual([
+        expect.objectContaining({ code: 'invalid_format', format: 'regex', path: ['en'] }),
+      ]);
+    }
+    expect(LocalizedString.safeParse({ sv: 'a\u202eb' }).error?.issues).toEqual([
+      expect.objectContaining({ code: 'invalid_format', path: ['sv'] }),
+    ]);
+  });
+});
+
+describe('localizedLineFor (#188)', () => {
+  const Line = localizedLineFor(['sv', 'en'], 20);
+
+  it('accepts and trims one line per locale', () => {
+    expect(Line.parse({ sv: '  Karta ', en: 'Map' })).toEqual({ sv: 'Karta', en: 'Map' });
+  });
+
+  it.each(SINGLE_LINE_TEXT_UNSAFE.map(([name, value]) => [name, value]))(
+    'raises exactly one invalid_format issue at the locale for %s',
+    (_, value) => {
+      expect(Line.safeParse({ sv: 'Karta', en: value }).error?.issues).toEqual([
+        expect.objectContaining({ code: 'invalid_format', format: 'regex', path: ['en'] }),
+      ]);
+    },
+  );
+
+  it('accepts every valid singleLineText(20) value', () => {
+    for (const value of singleLineTextFixtures.valid) {
+      expect(Line.safeParse({ sv: value, en: value }).success, JSON.stringify(value)).toBe(true);
+    }
+  });
+
+  it('uses the given limit', () => {
+    expect(Line.safeParse({ sv: 'x'.repeat(20), en: 'x' }).success).toBe(true);
+    expect(Line.safeParse({ sv: 'x'.repeat(21), en: 'x' }).error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_big', maximum: 20, path: ['sv'] }),
+    ]);
+  });
+
+  it('reports blank, missing and unknown locales like localizedStringFor', () => {
+    expect(Line.safeParse({ sv: ' ', en: 'Map' }).error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_small', path: ['sv'] }),
+    ]);
+    expect(Line.safeParse({ sv: 'Karta' }).error?.issues).toEqual([
+      expect.objectContaining({
+        code: 'custom',
+        path: ['en'],
+        params: { pwpCode: 'missing_locale', locale: 'en' },
+      }),
+    ]);
+    const SvOnly = localizedLineFor(['sv'], 20);
+    expect(SvOnly.safeParse({ sv: 'Karta', en: 'Map' }).error?.issues).toEqual([
+      expect.objectContaining({ code: 'unrecognized_keys', keys: ['en'] }),
+    ]);
+  });
+
+  it('rejects a line break that localizedStringFor accepts', () => {
+    const value = { sv: 'Karta\nnorr', en: 'Map' };
+    expect(localizedStringFor(['sv', 'en']).safeParse(value).success).toBe(true);
+    expect(Line.safeParse(value).error?.issues).toEqual([
+      expect.objectContaining({ code: 'invalid_format', path: ['sv'] }),
+    ]);
+  });
+});
+
+describe('text rule building blocks (#188)', () => {
+  it('are not exported from @pwp/schema/primitives', () => {
+    const names = Object.keys(primitives);
+    for (const internal of ['textRuleSource', 'NOT_IN_TEXT', 'NOT_IN_A_LINE', 'UNSAFE_ANYWHERE']) {
+      expect(names).not.toContain(internal);
+    }
   });
 });
 
